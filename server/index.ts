@@ -12,6 +12,7 @@ const port = Number(process.env.PORT || process.env.API_PORT || 3001);
 const mongoUri = process.env.MONGODB_URI;
 const databaseName = process.env.MONGODB_DB || 'Tracker';
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:3000';
+const MAX_POSTER_SIZE_BYTES = 20 * 1024 * 1024;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const distPath = path.resolve(__dirname, '..', 'dist');
@@ -24,9 +25,9 @@ const client = new MongoClient(mongoUri);
 const db = client.db(databaseName);
 
 app.use(cors({ origin: clientOrigin }));
-// Base64 poster images are sent in JSON, so allow a larger payload than Express default.
-app.use(express.json({ limit: '30mb' }));
-app.use(express.urlencoded({ extended: true, limit: '30mb' }));
+// Accept larger transport payloads; poster size is validated separately at 20MB.
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 type EntryType = 'movie' | 'series';
 
@@ -54,14 +55,36 @@ function getCollectionName(type: string): 'movies' | 'series' {
   throw new Error('Invalid type. Expected movie or series.');
 }
 
+function estimateDataUrlBytes(dataUrl: string): number | null {
+  const marker = ';base64,';
+  const markerIndex = dataUrl.indexOf(marker);
+  if (!dataUrl.startsWith('data:') || markerIndex === -1) {
+    return null;
+  }
+
+  const base64 = dataUrl.slice(markerIndex + marker.length).replace(/\s/g, '');
+  if (!base64) {
+    return 0;
+  }
+
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
+}
+
 function validateBasePayload(payload: Partial<BaseEntryPayload>): BaseEntryPayload {
   if (!payload.title || !payload.posterUrl || payload.rating === undefined || !payload.userId) {
     throw new Error('title, posterUrl, rating and userId are required');
   }
 
+  const posterUrl = String(payload.posterUrl).trim();
+  const posterSizeBytes = estimateDataUrlBytes(posterUrl);
+  if (posterSizeBytes !== null && posterSizeBytes > MAX_POSTER_SIZE_BYTES) {
+    throw new Error('Poster image exceeds 20MB limit.');
+  }
+
   return {
     title: String(payload.title).trim(),
-    posterUrl: String(payload.posterUrl).trim(),
+    posterUrl,
     rating: Number(payload.rating),
     userId: String(payload.userId),
   };
