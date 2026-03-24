@@ -51,8 +51,23 @@ This app can be deployed as one Node service that serves both API and frontend.
    - `MONGODB_DB=Tracker`
    - `CLIENT_ORIGIN=https://<your-render-domain>`
    - `NODE_ENV=production`
+   - `VITE_FIREBASE_API_KEY`
+   - `VITE_FIREBASE_AUTH_DOMAIN`
+   - `VITE_FIREBASE_PROJECT_ID`
+   - `VITE_FIREBASE_STORAGE_BUCKET`
+   - `VITE_FIREBASE_MESSAGING_SENDER_ID`
+   - `VITE_FIREBASE_APP_ID`
 5. Deploy and open your Render URL.
 
 Notes:
 - The server automatically uses `PORT` provided by the platform.
 - In production, Express serves the built frontend from `dist` and API from `/api/*`.
+
+### Firebase Sign-In on Render
+
+If Google Sign-In works locally but fails on Render, verify all of these:
+
+1. Firebase Console -> Authentication -> Sign-in method -> Google is enabled.
+2. Firebase Console -> Authentication -> Settings -> Authorized domains includes your Render domain.
+3. All `VITE_FIREBASE_*` variables are set in Render environment variables.
+4. You trigger a full redeploy after changing any `VITE_` variable, because these are baked into the frontend at build time.

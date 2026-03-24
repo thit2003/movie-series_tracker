@@ -243,6 +243,29 @@ export default function App() {
     }
   };
 
+  const handleGoogleSignIn = async () => {
+    try {
+      await signInWithGoogle();
+    } catch (error) {
+      const firebaseCode =
+        typeof error === 'object' && error && 'code' in error
+          ? String((error as { code?: string }).code)
+          : '';
+
+      if (firebaseCode === 'auth/unauthorized-domain') {
+        toast.error('Sign-in blocked: add this Render domain to Firebase Auth authorized domains.');
+      } else if (firebaseCode === 'auth/operation-not-allowed') {
+        toast.error('Google Sign-In is disabled in Firebase. Enable it in Authentication > Sign-in method.');
+      } else if (firebaseCode === 'auth/popup-blocked') {
+        toast.error('Popup blocked by browser. Allow popups and try again.');
+      } else {
+        toast.error('Google sign-in failed. Check Firebase config and authorized domains.');
+      }
+
+      console.error('Google sign-in error:', error);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-neutral-950 flex items-center justify-center">
@@ -265,7 +288,7 @@ export default function App() {
           <h1 className="text-4xl font-bold text-white mb-4 tracking-tight">Movie & TV Tracker</h1>
           <p className="text-neutral-400 mb-10 text-lg">Keep track of everything you watch. Rate your favorites and never lose your place in a series.</p>
           <button 
-            onClick={signInWithGoogle}
+            onClick={handleGoogleSignIn}
             className="w-full py-4 px-6 bg-white text-black font-semibold rounded-2xl flex items-center justify-center gap-3 hover:bg-neutral-200 transition-all active:scale-95"
           >
             Sign in with Google
