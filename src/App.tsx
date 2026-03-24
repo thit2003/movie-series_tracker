@@ -34,6 +34,7 @@ function getOrCreateUserId(): string {
 }
 
 export default function App() {
+  const MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024;
   const userId = useMemo(() => getOrCreateUserId(), []);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<EntryType>('movie');
@@ -52,6 +53,38 @@ export default function App() {
     currentSeason: 1,
     currentEpisode: 1
   });
+
+  const handlePosterFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please select a valid image file.');
+      event.target.value = '';
+      return;
+    }
+
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      toast.error('Image is too large. Please choose one under 2MB.');
+      event.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === 'string') {
+        setFormData((prev) => ({ ...prev, posterUrl: result }));
+      }
+    };
+    reader.onerror = () => {
+      toast.error('Failed to read selected image. Please try another file.');
+    };
+
+    reader.readAsDataURL(file);
+  };
 
   const fetchEntries = useCallback(async () => {
     setLoading(true);
@@ -126,6 +159,11 @@ export default function App() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!formData.posterUrl) {
+      toast.error('Please upload a poster image from your gallery.');
+      return;
+    }
 
     try {
       const data = {
@@ -396,15 +434,24 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-neutral-400">Poster URL</label>
-                  <input 
-                    required
-                    type="url" 
-                    value={formData.posterUrl}
-                    onChange={(e) => setFormData({ ...formData, posterUrl: e.target.value })}
-                    placeholder="https://example.com/poster.jpg"
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400 transition-colors"
+                  <label className="text-sm font-medium text-neutral-400">Poster Image</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePosterFileChange}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-sky-400 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-black hover:file:bg-sky-300 focus:outline-none focus:border-sky-400 transition-colors"
                   />
+                  <p className="text-xs text-neutral-500">Upload from gallery (max 2MB).</p>
+                  {formData.posterUrl && (
+                    <div className="mt-2">
+                      <img
+                        src={formData.posterUrl}
+                        alt="Poster preview"
+                        className="h-36 w-24 rounded-lg object-cover border border-neutral-800"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-6">
