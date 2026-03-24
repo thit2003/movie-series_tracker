@@ -24,7 +24,7 @@ function cn(...inputs: ClassValue[]) {
 }
 
 export default function App() {
-  const MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024;
+  const MAX_IMAGE_SIZE_BYTES = 20 * 1024 * 1024;
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<EntryType>('movie');
@@ -66,7 +66,7 @@ export default function App() {
     }
 
     if (file.size > MAX_IMAGE_SIZE_BYTES) {
-      toast.error('Image is too large. Please choose one under 2MB.');
+      toast.error('Image is too large. Please choose one under 20MB.');
       event.target.value = '';
       return;
     }
