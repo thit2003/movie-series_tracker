@@ -541,7 +541,7 @@ export default function App() {
                     onChange={handlePosterFileChange}
                     className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-sky-400 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-black hover:file:bg-sky-300 focus:outline-none focus:border-sky-400 transition-colors"
                   />
-                  <p className="text-xs text-neutral-500">Upload from gallery (max 2MB).</p>
+                  <p className="text-xs text-neutral-500">Upload from gallery (max 20MB).</p>
                   {formData.posterUrl && (
                     <div className="mt-2">
                       <img
