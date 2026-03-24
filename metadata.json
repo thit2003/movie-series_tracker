@@ -1,0 +1,5 @@
+{
+  "name": "Movie & TV Tracker",
+  "description": "A full-stack application to track your favorite movies and TV series with ratings and progress tracking.",
+  "requestFramePermissions": []
+}
