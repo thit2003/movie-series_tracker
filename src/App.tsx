@@ -9,8 +9,11 @@ import {
   Edit2, 
   Search, 
   X,
-  Loader2
+  Loader2,
+  LogOut
 } from 'lucide-react';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { auth, signInWithGoogle, logout } from './firebase';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Toaster, toast } from 'sonner';
@@ -20,23 +23,10 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const USER_ID_STORAGE_KEY = 'tracker_user_id';
-
-function getOrCreateUserId(): string {
-  const existing = localStorage.getItem(USER_ID_STORAGE_KEY);
-  if (existing) {
-    return existing;
-  }
-
-  const generated = crypto.randomUUID();
-  localStorage.setItem(USER_ID_STORAGE_KEY, generated);
-  return generated;
-}
-
 export default function App() {
   const MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024;
-  const userId = useMemo(() => getOrCreateUserId(), []);
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<EntryType>('movie');
   const [movies, setMovies] = useState<Movie[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
@@ -53,6 +43,14 @@ export default function App() {
     currentSeason: 1,
     currentEpisode: 1
   });
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
 
   const handlePosterFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -89,9 +87,16 @@ export default function App() {
   const fetchEntries = useCallback(async () => {
     setLoading(true);
     try {
+      if (!user?.uid) {
+        setMovies([]);
+        setSeries([]);
+        setLoading(false);
+        return;
+      }
+
       const [moviesResponse, seriesResponse] = await Promise.all([
-        fetch(`/api/entries?type=movie&userId=${encodeURIComponent(userId)}`),
-        fetch(`/api/entries?type=series&userId=${encodeURIComponent(userId)}`),
+        fetch(`/api/entries?type=movie&userId=${encodeURIComponent(user.uid)}`),
+        fetch(`/api/entries?type=series&userId=${encodeURIComponent(user.uid)}`),
       ]);
 
       if (!moviesResponse.ok || !seriesResponse.ok) {
@@ -111,7 +116,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [userId]);
+  }, [user?.uid]);
 
   useEffect(() => {
     fetchEntries();
@@ -160,6 +165,11 @@ export default function App() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!user?.uid) {
+      toast.error('You must be signed in to save entries.');
+      return;
+    }
+
     if (!formData.posterUrl) {
       toast.error('Please upload a poster image from your gallery.');
       return;
@@ -170,7 +180,7 @@ export default function App() {
         title: formData.title,
         posterUrl: formData.posterUrl,
         rating: Number(formData.rating),
-        userId,
+        userId: user.uid,
         ...(activeTab === 'series' ? {
           currentSeason: Number(formData.currentSeason),
           currentEpisode: Number(formData.currentEpisode)
@@ -241,6 +251,30 @@ export default function App() {
     );
   }
 
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center p-4 text-center">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full"
+        >
+          <div className="w-20 h-20 bg-sky-400/10 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-sky-400/20">
+            <Film className="w-10 h-10 text-sky-400" />
+          </div>
+          <h1 className="text-4xl font-bold text-white mb-4 tracking-tight">Movie & TV Tracker</h1>
+          <p className="text-neutral-400 mb-10 text-lg">Keep track of everything you watch. Rate your favorites and never lose your place in a series.</p>
+          <button 
+            onClick={signInWithGoogle}
+            className="w-full py-4 px-6 bg-white text-black font-semibold rounded-2xl flex items-center justify-center gap-3 hover:bg-neutral-200 transition-all active:scale-95"
+          >
+            Sign in with Google
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-neutral-950 text-white font-sans selection:bg-sky-400/30">
       <Toaster position="top-center" theme="dark" />
@@ -269,9 +303,15 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900 px-3 py-2">
-              <span className="text-xs text-neutral-500">Mongo user</span>
-              <span className="text-xs font-semibold text-neutral-200">{userId.slice(0, 8)}</span>
+            <div className="flex items-center gap-4">
+              <div className="hidden sm:flex flex-col items-end">
+                <span className="text-sm font-medium">{user.displayName}</span>
+                <button onClick={logout} className="text-xs text-neutral-500 hover:text-sky-400 transition-colors">Sign Out</button>
+              </div>
+              <img src={user.photoURL || ''} alt="Profile" className="w-10 h-10 rounded-full border border-neutral-800" referrerPolicy="no-referrer" />
+              <button onClick={logout} className="sm:hidden p-2 text-neutral-500 hover:text-sky-400">
+                <LogOut className="w-5 h-5" />
+              </button>
             </div>
           </div>
         </div>
