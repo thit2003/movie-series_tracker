@@ -24,7 +24,9 @@ const client = new MongoClient(mongoUri);
 const db = client.db(databaseName);
 
 app.use(cors({ origin: clientOrigin }));
-app.use(express.json());
+// Base64 poster images are sent in JSON, so allow a larger payload than Express default.
+app.use(express.json({ limit: '30mb' }));
+app.use(express.urlencoded({ extended: true, limit: '30mb' }));
 
 type EntryType = 'movie' | 'series';
 
@@ -170,6 +172,16 @@ app.delete('/api/entries/:id', async (req, res) => {
     const message = error instanceof Error ? error.message : 'Failed to delete entry';
     return res.status(400).json({ message });
   }
+});
+
+app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (error && typeof error === 'object' && 'type' in error && (error as { type?: string }).type === 'entity.too.large') {
+    return res.status(413).json({
+      message: 'Uploaded poster is too large. Please choose a smaller image (up to 20MB).',
+    });
+  }
+
+  return next(error);
 });
 
 if (fs.existsSync(distPath)) {
