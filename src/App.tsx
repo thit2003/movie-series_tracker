@@ -30,6 +30,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<EntryType>('movie');
   const [movies, setMovies] = useState<Movie[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
+  const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'rating' | 'title' | 'newest'>('newest');
   
@@ -121,6 +122,18 @@ export default function App() {
   useEffect(() => {
     fetchEntries();
   }, [fetchEntries]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target?.closest('[data-entry-card="true"]')) {
+        setActiveEntryId(null);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, []);
 
   const filteredEntries = useMemo(() => {
     const list = activeTab === 'movie' ? movies : series;
@@ -276,7 +289,7 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center p-4 text-center">
+      <div className="relative min-h-screen bg-neutral-950 flex flex-col items-center justify-center p-4 text-center">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -285,7 +298,7 @@ export default function App() {
           <div className="w-20 h-20 bg-sky-400/10 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-sky-400/20">
             <Film className="w-10 h-10 text-sky-400" />
           </div>
-          <h1 className="text-4xl font-bold text-white mb-4 tracking-tight">Movie & TV Tracker</h1>
+          <h1 className="text-4xl font-bold text-white mb-4 tracking-tight">Movie & Series Tracker</h1>
           <p className="text-neutral-400 mb-10 text-lg">Keep track of everything you watch. Rate your favorites and never lose your place in a series.</p>
           <button 
             onClick={handleGoogleSignIn}
@@ -294,6 +307,9 @@ export default function App() {
             Sign in with Google
           </button>
         </motion.div>
+        <footer className="absolute bottom-0 left-0 w-full border-t border-neutral-800/50 py-6 text-center text-sm text-neutral-500">
+          © 2026 Created by Thit Lwin Win Thant.
+        </footer>
       </div>
     );
   }
@@ -396,9 +412,15 @@ export default function App() {
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 key={item.id}
+                data-entry-card="true"
                 className="group relative flex flex-col"
               >
-                <div className="relative aspect-[2/3] rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800 mb-4 group-hover:border-sky-400/50 transition-colors">
+                <div
+                  onClick={() =>
+                    setActiveEntryId((currentId) => (currentId === item.id ? null : item.id))
+                  }
+                  className="relative aspect-[2/3] rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800 mb-4 group-hover:border-sky-400/50 transition-colors"
+                >
                   <img 
                     src={item.posterUrl} 
                     alt={item.title} 
@@ -410,15 +432,26 @@ export default function App() {
                   />
                   
                   {/* Overlay Actions */}
-                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3">
+                  <div
+                    className={cn(
+                      'absolute inset-0 bg-black/60 transition-opacity flex flex-col items-center justify-center gap-3',
+                      activeEntryId === item.id ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+                    )}
+                  >
                     <button 
-                      onClick={() => handleOpenModal(item)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleOpenModal(item);
+                      }}
                       className="w-10 h-10 bg-white text-black rounded-full flex items-center justify-center hover:scale-110 transition-transform"
                     >
                       <Edit2 className="w-4 h-4" />
                     </button>
                     <button 
-                      onClick={() => handleDelete(item.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleDelete(item.id);
+                      }}
                       className="w-10 h-10 bg-red-500 text-white rounded-full flex items-center justify-center hover:scale-110 transition-transform"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -456,6 +489,10 @@ export default function App() {
           </div>
         )}
       </main>
+
+      <footer className="border-t border-neutral-800/50 py-6 text-center text-sm text-neutral-500">
+        © 2026 Created by Thit Lwin Win Thant.
+      </footer>
 
       {/* Modal */}
       <AnimatePresence>
