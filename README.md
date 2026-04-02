@@ -16,6 +16,7 @@ MONGODB_URI=your_mongodb_connection_string
 MONGODB_DB=Tracker
 API_PORT=3001
 CLIENT_ORIGIN=http://localhost:3000
+OMDB_API_KEY=b75e2301
 ```
 
 ## Run locally
@@ -30,10 +31,13 @@ CLIENT_ORIGIN=http://localhost:3000
 ## API summary
 
 - `GET /api/health`
+- `GET /api/omdb/search?query=<movie title>`
 - `GET /api/entries?type=movie|series&userId=<id>`
 - `POST /api/entries?type=movie|series`
 - `PUT /api/entries/:id?type=movie|series`
 - `DELETE /api/entries/:id?type=movie|series`
+
+The movie add/edit modal includes an OMDb search helper that fills the title and poster from selected results.
 
 ## Deploy (single service)
 

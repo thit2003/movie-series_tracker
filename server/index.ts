@@ -12,6 +12,7 @@ const port = Number(process.env.PORT || process.env.API_PORT || 3001);
 const mongoUri = process.env.MONGODB_URI;
 const databaseName = process.env.MONGODB_DB || 'Tracker';
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:3000';
+const omdbApiKey = process.env.OMDB_API_KEY;
 const MAX_POSTER_SIZE_BYTES = 20 * 1024 * 1024;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -106,6 +107,50 @@ function validateSeriesPayload(payload: Partial<SeriesPayload>): SeriesPayload {
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, database: databaseName });
+});
+
+app.get('/api/omdb/search', async (req, res) => {
+  try {
+    const query = String(req.query.query || '').trim();
+
+    if (!query) {
+      return res.status(400).json({ message: 'query parameter is required' });
+    }
+
+    const url = new URL('https://www.omdbapi.com/');
+    url.searchParams.set('s', query);
+    url.searchParams.set('type', 'movie');
+    url.searchParams.set('apikey', omdbApiKey);
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('OMDb request failed');
+    }
+
+    const data = (await response.json()) as {
+      Search?: Array<{
+        Title: string;
+        Year: string;
+        imdbID: string;
+        Type: string;
+        Poster: string;
+      }>;
+      Response?: string;
+      Error?: string;
+    };
+
+    if (data.Response === 'False') {
+      return res.json({ results: [], totalResults: 0, error: data.Error || 'No results found.' });
+    }
+
+    return res.json({
+      results: data.Search || [],
+      totalResults: data.Search?.length || 0,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to search OMDb';
+    return res.status(500).json({ message });
+  }
 });
 
 app.get('/api/entries', async (req, res) => {

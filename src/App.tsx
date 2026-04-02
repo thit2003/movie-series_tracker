@@ -19,6 +19,16 @@ import { twMerge } from 'tailwind-merge';
 import { Toaster, toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 
+const DEFAULT_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&q=80&w=800';
+
+type OmdbSearchResult = {
+  Title: string;
+  Year: string;
+  imdbID: string;
+  Type: string;
+  Poster: string;
+};
+
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -33,6 +43,10 @@ export default function App() {
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'rating' | 'title' | 'newest'>('newest');
+  const [movieSearchQuery, setMovieSearchQuery] = useState('');
+  const [movieSearchResults, setMovieSearchResults] = useState<OmdbSearchResult[]>([]);
+  const [movieSearchLoading, setMovieSearchLoading] = useState(false);
+  const [movieSearchError, setMovieSearchError] = useState('');
   
   // Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -162,6 +176,7 @@ export default function App() {
         currentSeason: (entry as Series).currentSeason || 1,
         currentEpisode: (entry as Series).currentEpisode || 1
       });
+      setMovieSearchQuery(entry.title);
     } else {
       setEditingEntry(null);
       setFormData({
@@ -171,8 +186,73 @@ export default function App() {
         currentSeason: 1,
         currentEpisode: 1
       });
+      setMovieSearchQuery('');
     }
+    setMovieSearchResults([]);
+    setMovieSearchError('');
     setIsModalOpen(true);
+  };
+
+  const handleMovieSearch = useCallback(async (query: string) => {
+    const trimmedQuery = query.trim();
+
+    if (!trimmedQuery) {
+      setMovieSearchResults([]);
+      setMovieSearchError('');
+      return;
+    }
+
+    setMovieSearchLoading(true);
+    setMovieSearchError('');
+
+    try {
+      const response = await fetch(`/api/omdb/search?query=${encodeURIComponent(trimmedQuery)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Search failed');
+      }
+
+      if (data?.error) {
+        setMovieSearchResults([]);
+        setMovieSearchError(data.error);
+        return;
+      }
+
+      setMovieSearchResults((data?.results as OmdbSearchResult[] | undefined) || []);
+      if (!data?.results?.length) {
+        setMovieSearchError('No movies matched your search.');
+      }
+    } catch (error) {
+      console.error('OMDb search error:', error);
+      setMovieSearchResults([]);
+      setMovieSearchError('Failed to search movies.');
+    } finally {
+      setMovieSearchLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isModalOpen || activeTab !== 'movie') {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void handleMovieSearch(movieSearchQuery);
+    }, 450);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [activeTab, handleMovieSearch, isModalOpen, movieSearchQuery]);
+
+  const handleSelectMovieResult = (result: OmdbSearchResult) => {
+    setFormData((prev) => ({
+      ...prev,
+      title: result.Title,
+      posterUrl: result.Poster && result.Poster !== 'N/A' ? result.Poster : DEFAULT_POSTER_FALLBACK,
+    }));
+    setMovieSearchQuery(result.Title);
+    setMovieSearchResults([]);
+    setMovieSearchError('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -184,7 +264,7 @@ export default function App() {
     }
 
     if (!formData.posterUrl) {
-      toast.error('Please upload a poster image from your gallery.');
+      toast.error('Please add a poster image or select a movie from OMDb search.');
       return;
     }
 
@@ -533,26 +613,102 @@ export default function App() {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-neutral-400">Poster Image</label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handlePosterFileChange}
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-sky-400 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-black hover:file:bg-sky-300 focus:outline-none focus:border-sky-400 transition-colors"
-                  />
-                  <p className="text-xs text-neutral-500">Upload from gallery (max 20MB).</p>
-                  {formData.posterUrl && (
-                    <div className="mt-2">
-                      <img
-                        src={formData.posterUrl}
-                        alt="Poster preview"
-                        className="h-36 w-24 rounded-lg object-cover border border-neutral-800"
-                        referrerPolicy="no-referrer"
-                      />
+                {activeTab === 'movie' && (
+                  <div className="space-y-3 rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-neutral-400">Search OMDb</label>
+                      <div className="flex gap-3">
+                        <input
+                          type="text"
+                          value={movieSearchQuery}
+                          onChange={(e) => setMovieSearchQuery(e.target.value)}
+                          placeholder="Search for a movie title..."
+                          className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400 transition-colors"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleMovieSearch(movieSearchQuery)}
+                          className="shrink-0 rounded-xl bg-sky-400 px-4 py-3 text-sm font-bold text-black transition-all hover:bg-sky-300 active:scale-95"
+                        >
+                          Search
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
+
+                    {movieSearchLoading && (
+                      <p className="text-xs text-neutral-500">Searching OMDb...</p>
+                    )}
+
+                    {!movieSearchLoading && movieSearchError && (
+                      <p className="text-xs text-neutral-500">{movieSearchError}</p>
+                    )}
+
+                    {movieSearchResults.length > 0 && (
+                      <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                        {movieSearchResults.map((result) => (
+                          <button
+                            key={result.imdbID}
+                            type="button"
+                            onClick={() => handleSelectMovieResult(result)}
+                            className="flex w-full items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-2 text-left transition-colors hover:border-sky-400/50 hover:bg-neutral-800"
+                          >
+                            <img
+                              src={result.Poster !== 'N/A' ? result.Poster : DEFAULT_POSTER_FALLBACK}
+                              alt={result.Title}
+                              className="h-16 w-11 rounded-lg object-cover"
+                              referrerPolicy="no-referrer"
+                              onError={(event) => {
+                                (event.target as HTMLImageElement).src = DEFAULT_POSTER_FALLBACK;
+                              }}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold text-white">{result.Title}</p>
+                              <p className="text-xs text-neutral-500">{result.Year}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeTab === 'movie' ? (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-400">Poster</label>
+                    <p className="text-xs text-neutral-500">Use OMDb search to populate the poster automatically.</p>
+                    {formData.posterUrl && (
+                      <div className="mt-2">
+                        <img
+                          src={formData.posterUrl}
+                          alt="Poster preview"
+                          className="h-36 w-24 rounded-lg object-cover border border-neutral-800"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-400">Poster Image</label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePosterFileChange}
+                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-sky-400 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-black hover:file:bg-sky-300 focus:outline-none focus:border-sky-400 transition-colors"
+                    />
+                    <p className="text-xs text-neutral-500">Upload from gallery (max 20MB).</p>
+                    {formData.posterUrl && (
+                      <div className="mt-2">
+                        <img
+                          src={formData.posterUrl}
+                          alt="Poster preview"
+                          className="h-36 w-24 rounded-lg object-cover border border-neutral-800"
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-6">
                   <div className="space-y-2">
