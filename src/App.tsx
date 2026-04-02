@@ -47,6 +47,7 @@ export default function App() {
   const [movieSearchResults, setMovieSearchResults] = useState<OmdbSearchResult[]>([]);
   const [movieSearchLoading, setMovieSearchLoading] = useState(false);
   const [movieSearchError, setMovieSearchError] = useState('');
+  const [movieSearchLocked, setMovieSearchLocked] = useState(false);
   
   // Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -177,6 +178,7 @@ export default function App() {
         currentEpisode: (entry as Series).currentEpisode || 1
       });
       setMovieSearchQuery(entry.title);
+      setMovieSearchLocked(true);
     } else {
       setEditingEntry(null);
       setFormData({
@@ -187,6 +189,7 @@ export default function App() {
         currentEpisode: 1
       });
       setMovieSearchQuery('');
+      setMovieSearchLocked(false);
     }
     setMovieSearchResults([]);
     setMovieSearchError('');
@@ -233,7 +236,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!isModalOpen || activeTab !== 'movie') {
+    if (!isModalOpen || activeTab !== 'movie' || movieSearchLocked) {
       return;
     }
 
@@ -242,7 +245,7 @@ export default function App() {
     }, 450);
 
     return () => window.clearTimeout(timeoutId);
-  }, [activeTab, handleMovieSearch, isModalOpen, movieSearchQuery]);
+  }, [activeTab, handleMovieSearch, isModalOpen, movieSearchLocked, movieSearchQuery]);
 
   const handleSelectMovieResult = (result: OmdbSearchResult) => {
     setFormData((prev) => ({
@@ -251,6 +254,7 @@ export default function App() {
       posterUrl: result.Poster && result.Poster !== 'N/A' ? result.Poster : DEFAULT_POSTER_FALLBACK,
     }));
     setMovieSearchQuery(result.Title);
+    setMovieSearchLocked(true);
     setMovieSearchResults([]);
     setMovieSearchError('');
   };
@@ -621,7 +625,10 @@ export default function App() {
                         <input
                           type="text"
                           value={movieSearchQuery}
-                          onChange={(e) => setMovieSearchQuery(e.target.value)}
+                          onChange={(e) => {
+                            setMovieSearchLocked(false);
+                            setMovieSearchQuery(e.target.value);
+                          }}
                           placeholder="Search for a movie title..."
                           className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400 transition-colors"
                         />
