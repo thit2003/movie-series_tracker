@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "node ./node_modules/concurrently/dist/bin/concurrently.js \"npm run dev:client\" \"npm run dev:api\"",
-    "dev:client": "node ./node_modules/vite/bin/vite.js --port=3000 --host=0.0.0.0",
+    "dev:client": "node ./node_modules/vite/bin/vite.js --port=3000 --strictPort --host=0.0.0.0",
     "dev:api": "node ./node_modules/tsx/dist/cli.mjs watch server/index.ts",
     "build": "node ./node_modules/vite/bin/vite.js build",
     "start": "node ./node_modules/tsx/dist/cli.mjs server/index.ts",

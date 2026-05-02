@@ -21,12 +21,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const DEFAULT_POSTER_FALLBACK = 'https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&q=80&w=800';
 
-type OmdbSearchResult = {
-  Title: string;
-  Year: string;
-  imdbID: string;
-  Type: string;
-  Poster: string;
+type TmdbSearchResult = {
+  id: number;
+  title: string;
+  year: string;
+  mediaType: EntryType;
+  posterUrl: string;
+  overview: string;
+  voteAverage: number;
 };
 
 function cn(...inputs: ClassValue[]) {
@@ -43,11 +45,11 @@ export default function App() {
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'rating' | 'title' | 'newest'>('newest');
-  const [movieSearchQuery, setMovieSearchQuery] = useState('');
-  const [movieSearchResults, setMovieSearchResults] = useState<OmdbSearchResult[]>([]);
-  const [movieSearchLoading, setMovieSearchLoading] = useState(false);
-  const [movieSearchError, setMovieSearchError] = useState('');
-  const [movieSearchLocked, setMovieSearchLocked] = useState(false);
+  const [tmdbSearchQuery, setTmdbSearchQuery] = useState('');
+  const [tmdbSearchResults, setTmdbSearchResults] = useState<TmdbSearchResult[]>([]);
+  const [tmdbSearchLoading, setTmdbSearchLoading] = useState(false);
+  const [tmdbSearchError, setTmdbSearchError] = useState('');
+  const [tmdbSearchLocked, setTmdbSearchLocked] = useState(false);
   
   // Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -177,8 +179,8 @@ export default function App() {
         currentSeason: (entry as Series).currentSeason || 1,
         currentEpisode: (entry as Series).currentEpisode || 1
       });
-      setMovieSearchQuery(entry.title);
-      setMovieSearchLocked(true);
+      setTmdbSearchQuery(entry.title);
+      setTmdbSearchLocked(true);
     } else {
       setEditingEntry(null);
       setFormData({
@@ -188,28 +190,28 @@ export default function App() {
         currentSeason: 1,
         currentEpisode: 1
       });
-      setMovieSearchQuery('');
-      setMovieSearchLocked(false);
+      setTmdbSearchQuery('');
+      setTmdbSearchLocked(false);
     }
-    setMovieSearchResults([]);
-    setMovieSearchError('');
+    setTmdbSearchResults([]);
+    setTmdbSearchError('');
     setIsModalOpen(true);
   };
 
-  const handleMovieSearch = useCallback(async (query: string) => {
+  const handleTmdbSearch = useCallback(async (query: string) => {
     const trimmedQuery = query.trim();
 
     if (!trimmedQuery) {
-      setMovieSearchResults([]);
-      setMovieSearchError('');
+      setTmdbSearchResults([]);
+      setTmdbSearchError('');
       return;
     }
 
-    setMovieSearchLoading(true);
-    setMovieSearchError('');
+    setTmdbSearchLoading(true);
+    setTmdbSearchError('');
 
     try {
-      const response = await fetch(`/api/omdb/search?query=${encodeURIComponent(trimmedQuery)}`);
+      const response = await fetch(`/api/tmdb/search?type=${activeTab}&query=${encodeURIComponent(trimmedQuery)}`);
       const data = await response.json();
 
       if (!response.ok) {
@@ -217,46 +219,46 @@ export default function App() {
       }
 
       if (data?.error) {
-        setMovieSearchResults([]);
-        setMovieSearchError(data.error);
+        setTmdbSearchResults([]);
+        setTmdbSearchError(data.error);
         return;
       }
 
-      setMovieSearchResults((data?.results as OmdbSearchResult[] | undefined) || []);
+      setTmdbSearchResults((data?.results as TmdbSearchResult[] | undefined) || []);
       if (!data?.results?.length) {
-        setMovieSearchError('No movies matched your search.');
+        setTmdbSearchError(`No ${activeTab === 'movie' ? 'movies' : 'series'} matched your search.`);
       }
     } catch (error) {
-      console.error('OMDb search error:', error);
-      setMovieSearchResults([]);
-      setMovieSearchError('Failed to search movies.');
+      console.error('TMDb search error:', error);
+      setTmdbSearchResults([]);
+      setTmdbSearchError(`Failed to search ${activeTab === 'movie' ? 'movies' : 'series'}.`);
     } finally {
-      setMovieSearchLoading(false);
+      setTmdbSearchLoading(false);
     }
-  }, []);
+  }, [activeTab]);
 
   useEffect(() => {
-    if (!isModalOpen || activeTab !== 'movie' || movieSearchLocked) {
+    if (!isModalOpen || tmdbSearchLocked) {
       return;
     }
 
     const timeoutId = window.setTimeout(() => {
-      void handleMovieSearch(movieSearchQuery);
+      void handleTmdbSearch(tmdbSearchQuery);
     }, 450);
 
     return () => window.clearTimeout(timeoutId);
-  }, [activeTab, handleMovieSearch, isModalOpen, movieSearchLocked, movieSearchQuery]);
+  }, [handleTmdbSearch, isModalOpen, tmdbSearchLocked, tmdbSearchQuery]);
 
-  const handleSelectMovieResult = (result: OmdbSearchResult) => {
+  const handleSelectTmdbResult = (result: TmdbSearchResult) => {
     setFormData((prev) => ({
       ...prev,
-      title: result.Title,
-      posterUrl: result.Poster && result.Poster !== 'N/A' ? result.Poster : DEFAULT_POSTER_FALLBACK,
+      title: result.title,
+      posterUrl: result.posterUrl || DEFAULT_POSTER_FALLBACK,
     }));
-    setMovieSearchQuery(result.Title);
-    setMovieSearchLocked(true);
-    setMovieSearchResults([]);
-    setMovieSearchError('');
+    setTmdbSearchQuery(result.title);
+    setTmdbSearchLocked(true);
+    setTmdbSearchResults([]);
+    setTmdbSearchError('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -268,7 +270,7 @@ export default function App() {
     }
 
     if (!formData.posterUrl) {
-      toast.error('Please add a poster image or select a movie from OMDb search.');
+      toast.error(`Please select a ${activeTab === 'movie' ? 'movie' : 'series'} from TMDb search or add a poster image.`);
       return;
     }
 
@@ -399,7 +401,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white font-sans selection:bg-sky-400/30">
+    <div className="min-h-screen flex flex-col bg-neutral-950 text-white font-sans selection:bg-sky-400/30">
       <Toaster position="top-center" theme="dark" />
       
       {/* Header */}
@@ -440,7 +442,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Navigation & Actions */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-10">
           <div className="flex p-1 bg-neutral-900 rounded-2xl w-fit border border-neutral-800">
@@ -574,7 +576,7 @@ export default function App() {
         )}
       </main>
 
-      <footer className="border-t border-neutral-800/50 py-6 text-center text-sm text-neutral-500">
+      <footer className="mt-auto border-t border-neutral-800/50 py-6 text-center text-sm text-neutral-500">
         © 2026 Created by Thit Lwin Win Thant.
       </footer>
 
@@ -617,105 +619,88 @@ export default function App() {
                   />
                 </div>
 
-                {activeTab === 'movie' && (
-                  <div className="space-y-3 rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium text-neutral-400">Search OMDb</label>
-                      <div className="flex gap-3">
-                        <input
-                          type="text"
-                          value={movieSearchQuery}
-                          onChange={(e) => {
-                            setMovieSearchLocked(false);
-                            setMovieSearchQuery(e.target.value);
-                          }}
-                          placeholder="Search for a movie title..."
-                          className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400 transition-colors"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => void handleMovieSearch(movieSearchQuery)}
-                          className="shrink-0 rounded-xl bg-sky-400 px-4 py-3 text-sm font-bold text-black transition-all hover:bg-sky-300 active:scale-95"
-                        >
-                          Search
-                        </button>
-                      </div>
+                <div className="space-y-3 rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-400">
+                      Search TMDb
+                    </label>
+                    <div className="flex gap-3">
+                      <input
+                        type="text"
+                        value={tmdbSearchQuery}
+                        onChange={(e) => {
+                          setTmdbSearchLocked(false);
+                          setTmdbSearchQuery(e.target.value);
+                        }}
+                        placeholder={`Search for a ${activeTab === 'movie' ? 'movie' : 'series'} title...`}
+                        className="w-full bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400 transition-colors"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleTmdbSearch(tmdbSearchQuery)}
+                        className="shrink-0 rounded-xl bg-sky-400 px-4 py-3 text-sm font-bold text-black transition-all hover:bg-sky-300 active:scale-95"
+                      >
+                        Search
+                      </button>
                     </div>
-
-                    {movieSearchLoading && (
-                      <p className="text-xs text-neutral-500">Searching OMDb...</p>
-                    )}
-
-                    {!movieSearchLoading && movieSearchError && (
-                      <p className="text-xs text-neutral-500">{movieSearchError}</p>
-                    )}
-
-                    {movieSearchResults.length > 0 && (
-                      <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
-                        {movieSearchResults.map((result) => (
-                          <button
-                            key={result.imdbID}
-                            type="button"
-                            onClick={() => handleSelectMovieResult(result)}
-                            className="flex w-full items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-2 text-left transition-colors hover:border-sky-400/50 hover:bg-neutral-800"
-                          >
-                            <img
-                              src={result.Poster !== 'N/A' ? result.Poster : DEFAULT_POSTER_FALLBACK}
-                              alt={result.Title}
-                              className="h-16 w-11 rounded-lg object-cover"
-                              referrerPolicy="no-referrer"
-                              onError={(event) => {
-                                (event.target as HTMLImageElement).src = DEFAULT_POSTER_FALLBACK;
-                              }}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-white">{result.Title}</p>
-                              <p className="text-xs text-neutral-500">{result.Year}</p>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
                   </div>
-                )}
 
-                {activeTab === 'movie' ? (
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-neutral-400">Poster</label>
-                    <p className="text-xs text-neutral-500">Use OMDb search to populate the poster automatically.</p>
-                    {formData.posterUrl && (
-                      <div className="mt-2">
-                        <img
-                          src={formData.posterUrl}
-                          alt="Poster preview"
-                          className="h-36 w-24 rounded-lg object-cover border border-neutral-800"
-                          referrerPolicy="no-referrer"
-                        />
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium text-neutral-400">Poster Image</label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handlePosterFileChange}
-                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-sky-400 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-black hover:file:bg-sky-300 focus:outline-none focus:border-sky-400 transition-colors"
-                    />
-                    <p className="text-xs text-neutral-500">Upload from gallery (max 20MB).</p>
-                    {formData.posterUrl && (
-                      <div className="mt-2">
-                        <img
-                          src={formData.posterUrl}
-                          alt="Poster preview"
-                          className="h-36 w-24 rounded-lg object-cover border border-neutral-800"
-                          referrerPolicy="no-referrer"
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
+                  {tmdbSearchLoading && (
+                    <p className="text-xs text-neutral-500">Searching TMDb...</p>
+                  )}
+
+                  {!tmdbSearchLoading && tmdbSearchError && (
+                    <p className="text-xs text-neutral-500">{tmdbSearchError}</p>
+                  )}
+
+                  {tmdbSearchResults.length > 0 && (
+                    <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                      {tmdbSearchResults.map((result) => (
+                        <button
+                          key={`${result.mediaType}-${result.id}`}
+                          type="button"
+                          onClick={() => handleSelectTmdbResult(result)}
+                          className="flex w-full items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-2 text-left transition-colors hover:border-sky-400/50 hover:bg-neutral-800"
+                        >
+                          <img
+                            src={result.posterUrl || DEFAULT_POSTER_FALLBACK}
+                            alt={result.title}
+                            className="h-16 w-11 rounded-lg object-cover"
+                            referrerPolicy="no-referrer"
+                            onError={(event) => {
+                              (event.target as HTMLImageElement).src = DEFAULT_POSTER_FALLBACK;
+                            }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-semibold text-white">{result.title}</p>
+                            <p className="text-xs text-neutral-500">{result.year || 'Unknown year'}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-400">Poster</label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handlePosterFileChange}
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm file:mr-4 file:rounded-lg file:border-0 file:bg-sky-400 file:px-3 file:py-2 file:text-xs file:font-semibold file:text-black hover:file:bg-sky-300 focus:outline-none focus:border-sky-400 transition-colors"
+                  />
+                  <p className="text-xs text-neutral-500">TMDb fills this automatically when a poster is available. You can upload one instead.</p>
+                  {formData.posterUrl && (
+                    <div className="mt-2">
+                      <img
+                        src={formData.posterUrl}
+                        alt="Poster preview"
+                        className="h-36 w-24 rounded-lg object-cover border border-neutral-800"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  )}
+                </div>
 
                 <div className="grid grid-cols-2 gap-6">
                   <div className="space-y-2">

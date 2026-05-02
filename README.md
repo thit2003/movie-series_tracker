@@ -1,77 +1,145 @@
-# Movie and Series Tracker
+# Movie & Series Tracker
 
-This project now uses MongoDB as the Tracker database through an Express API.
+A full-stack watch tracker for saving movies and TV series, rating them, and keeping track of current season and episode progress. The app uses Google sign-in, stores each user's watchlist in MongoDB, and uses TMDb search to fill movie and series titles/posters automatically.
+
+## Live Demo
+
+[https://tracker-353i.onrender.com](https://tracker-353i.onrender.com)
+
+## Features
+
+- Google authentication with Firebase
+- Separate movie and TV series tabs
+- TMDb search for both movies and series
+- Automatic poster selection from TMDb
+- Manual poster upload fallback
+- Movie and series ratings from 0 to 10
+- Series progress tracking by season and episode
+- Search, sort, edit, and delete saved entries
+- Express API with MongoDB persistence
+
+## Tech Stack
+
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS
+- Express
+- MongoDB
+- Firebase Authentication
+- TMDb API
 
 ## Prerequisites
 
 - Node.js 18+
-- A MongoDB database (Atlas or local)
+- npm
+- MongoDB database, either local or MongoDB Atlas
+- Firebase project with Google sign-in enabled
+- TMDb API key or TMDb access token
 
-## Environment
+## Environment Variables
 
-Create or update `.env` in the project root:
+Create a `.env` file in the project root:
 
 ```env
 MONGODB_URI=your_mongodb_connection_string
 MONGODB_DB=Tracker
 API_PORT=3001
 CLIENT_ORIGIN=http://localhost:3000
-OMDB_API_KEY=b75e2301
+
+TMDB_API_KEY=your_tmdb_v3_api_key
+# Or use this instead of TMDB_API_KEY:
+# TMDB_ACCESS_TOKEN=your_tmdb_access_token
+
+VITE_FIREBASE_API_KEY=your_firebase_api_key
+VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your_project_id
+VITE_FIREBASE_STORAGE_BUCKET=your_project.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+VITE_FIREBASE_APP_ID=your_app_id
 ```
 
-## Run locally
+## Run Locally
 
-1. Install dependencies:
-   npm install
-2. Start frontend + API together:
-   npm run dev
-3. Open:
-   http://localhost:3000
+Install dependencies:
 
-## API summary
+```bash
+npm install
+```
+
+Start the Vite client and Express API together:
+
+```bash
+npm run dev
+```
+
+Open the app:
+
+[http://localhost:3000](http://localhost:3000)
+
+The API runs on:
+
+[http://localhost:3001](http://localhost:3001)
+
+## Test Locally
+
+Run the TypeScript check:
+
+```bash
+npm run lint
+```
+
+Build the production frontend:
+
+```bash
+npm run build
+```
+
+Test the API health route:
+
+```bash
+curl http://localhost:3001/api/health
+```
+
+Test TMDb movie search:
+
+```bash
+curl "http://localhost:3001/api/tmdb/search?type=movie&query=inception"
+```
+
+Test TMDb series search:
+
+```bash
+curl "http://localhost:3001/api/tmdb/search?type=series&query=breaking%20bad"
+```
+
+## API Summary
 
 - `GET /api/health`
-- `GET /api/omdb/search?query=<movie title>`
+- `GET /api/tmdb/search?type=movie|series&query=<title>`
 - `GET /api/entries?type=movie|series&userId=<id>`
 - `POST /api/entries?type=movie|series`
 - `PUT /api/entries/:id?type=movie|series`
 - `DELETE /api/entries/:id?type=movie|series`
 
-The movie add/edit modal includes an OMDb search helper that fills the title and poster from selected results.
+## Deployment
 
-## Deploy (single service)
+The app is deployed as a single Node service. Express serves the API from `/api/*` and serves the built Vite frontend from `dist` in production.
 
-This app can be deployed as one Node service that serves both API and frontend.
+For Render:
 
-### Render deployment
+1. Create a new Web Service from the GitHub repository.
+2. Use `npm install && npm run build` as the build command.
+3. Use `npm run start` as the start command.
+4. Add the same environment variables used locally.
+5. Set `CLIENT_ORIGIN` to your Render URL.
+6. Add the Render domain to Firebase Authentication authorized domains.
 
-1. Push this project to GitHub.
-2. In Render, create a new `Web Service` from the repo.
-3. Configure:
-   - Build Command: `npm install && npm run build`
-   - Start Command: `npm run start`
-4. Add environment variables:
-   - `MONGODB_URI`
-   - `MONGODB_DB=Tracker`
-   - `CLIENT_ORIGIN=https://<your-render-domain>`
-   - `NODE_ENV=production`
-   - `VITE_FIREBASE_API_KEY`
-   - `VITE_FIREBASE_AUTH_DOMAIN`
-   - `VITE_FIREBASE_PROJECT_ID`
-   - `VITE_FIREBASE_STORAGE_BUCKET`
-   - `VITE_FIREBASE_MESSAGING_SENDER_ID`
-   - `VITE_FIREBASE_APP_ID`
-5. Deploy and open your Render URL.
+## Firebase Notes
 
-Notes:
-- The server automatically uses `PORT` provided by the platform.
-- In production, Express serves the built frontend from `dist` and API from `/api/*`.
+If Google sign-in fails after deployment:
 
-### Firebase Sign-In on Render
-
-If Google Sign-In works locally but fails on Render, verify all of these:
-
-1. Firebase Console -> Authentication -> Sign-in method -> Google is enabled.
-2. Firebase Console -> Authentication -> Settings -> Authorized domains includes your Render domain.
-3. All `VITE_FIREBASE_*` variables are set in Render environment variables.
-4. You trigger a full redeploy after changing any `VITE_` variable, because these are baked into the frontend at build time.
+1. Make sure Google sign-in is enabled in Firebase Authentication.
+2. Add your Render domain to Firebase authorized domains.
+3. Confirm all `VITE_FIREBASE_*` variables are set in Render.
+4. Redeploy after changing any `VITE_` variable because Vite embeds them during build.

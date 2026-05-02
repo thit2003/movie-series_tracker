@@ -12,8 +12,10 @@ const port = Number(process.env.PORT || process.env.API_PORT || 3001);
 const mongoUri = process.env.MONGODB_URI;
 const databaseName = process.env.MONGODB_DB || 'Tracker';
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:3000';
-const omdbApiKey = process.env.OMDB_API_KEY;
+const tmdbApiKey = process.env.TMDB_API_KEY;
+const tmdbAccessToken = process.env.TMDB_ACCESS_TOKEN;
 const MAX_POSTER_SIZE_BYTES = 20 * 1024 * 1024;
+const TMDB_POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w500';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const distPath = path.resolve(__dirname, '..', 'dist');
@@ -31,6 +33,17 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 type EntryType = 'movie' | 'series';
+
+type TmdbSearchResult = {
+  id: number;
+  title?: string;
+  name?: string;
+  release_date?: string;
+  first_air_date?: string;
+  poster_path?: string | null;
+  overview?: string;
+  vote_average?: number;
+};
 
 type BaseEntryPayload = {
   title: string;
@@ -109,46 +122,66 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, database: databaseName });
 });
 
-app.get('/api/omdb/search', async (req, res) => {
+app.get('/api/tmdb/search', async (req, res) => {
   try {
     const query = String(req.query.query || '').trim();
+    const type = String(req.query.type || '');
 
     if (!query) {
       return res.status(400).json({ message: 'query parameter is required' });
     }
 
-    const url = new URL('https://www.omdbapi.com/');
-    url.searchParams.set('s', query);
-    url.searchParams.set('type', 'movie');
-    url.searchParams.set('apikey', omdbApiKey);
+    if (type !== 'movie' && type !== 'series') {
+      return res.status(400).json({ message: 'type query parameter must be movie or series' });
+    }
 
-    const response = await fetch(url);
+    if (!tmdbApiKey && !tmdbAccessToken) {
+      return res.status(500).json({ message: 'TMDB_API_KEY or TMDB_ACCESS_TOKEN is required in .env' });
+    }
+
+    const tmdbType = type === 'series' ? 'tv' : 'movie';
+    const url = new URL(`https://api.themoviedb.org/3/search/${tmdbType}`);
+    url.searchParams.set('query', query);
+    url.searchParams.set('include_adult', 'false');
+    url.searchParams.set('language', 'en-US');
+    url.searchParams.set('page', '1');
+
+    const headers: HeadersInit = {};
+    if (tmdbAccessToken) {
+      headers.Authorization = `Bearer ${tmdbAccessToken}`;
+    } else if (tmdbApiKey) {
+      url.searchParams.set('api_key', tmdbApiKey);
+    }
+
+    const response = await fetch(url, { headers });
     if (!response.ok) {
-      throw new Error('OMDb request failed');
+      throw new Error('TMDb request failed');
     }
 
     const data = (await response.json()) as {
-      Search?: Array<{
-        Title: string;
-        Year: string;
-        imdbID: string;
-        Type: string;
-        Poster: string;
-      }>;
-      Response?: string;
-      Error?: string;
+      results?: TmdbSearchResult[];
+      total_results?: number;
     };
 
-    if (data.Response === 'False') {
-      return res.json({ results: [], totalResults: 0, error: data.Error || 'No results found.' });
-    }
-
     return res.json({
-      results: data.Search || [],
-      totalResults: data.Search?.length || 0,
+      results: (data.results || []).map((result) => {
+        const title = type === 'series' ? result.name : result.title;
+        const date = type === 'series' ? result.first_air_date : result.release_date;
+
+        return {
+          id: result.id,
+          title: title || 'Untitled',
+          year: date ? date.slice(0, 4) : '',
+          mediaType: type,
+          posterUrl: result.poster_path ? `${TMDB_POSTER_BASE_URL}${result.poster_path}` : '',
+          overview: result.overview || '',
+          voteAverage: result.vote_average ?? 0,
+        };
+      }),
+      totalResults: data.total_results || 0,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Failed to search OMDb';
+    const message = error instanceof Error ? error.message : 'Failed to search TMDb';
     return res.status(500).json({ message });
   }
 });
