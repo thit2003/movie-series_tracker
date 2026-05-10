@@ -15,6 +15,10 @@ A full-stack watch tracker for saving movies and TV series, rating them, and kee
 - Manual poster upload fallback
 - Movie and series ratings from 0 to 10
 - Series progress tracking by season and episode
+- Create, rename, and delete custom watched lists
+- Share a watched list with another user's email
+- View-only and edit access for shared lists
+- Switch between your own lists and lists shared with you
 - Search, sort, edit, and delete saved entries
 - Express API with MongoDB persistence
 
@@ -116,11 +120,35 @@ curl "http://localhost:3001/api/tmdb/search?type=series&query=breaking%20bad"
 ## API Summary
 
 - `GET /api/health`
+- `POST /api/users`
+- `GET /api/lists?userId=<id>&email=<email>`
+- `POST /api/lists`
+- `PUT /api/lists/:id`
+- `DELETE /api/lists/:id?ownerUserId=<id>`
+- `GET /api/shares?userId=<id>&email=<email>&listId=<listId>`
+- `POST /api/shares`
+- `PUT /api/shares/:id`
+- `DELETE /api/shares/:id?ownerUserId=<id>`
 - `GET /api/tmdb/search?type=movie|series&query=<title>`
-- `GET /api/entries?type=movie|series&userId=<id>`
+- `GET /api/entries?type=movie|series&userId=<id>&userEmail=<email>&listId=<listId>`
 - `POST /api/entries?type=movie|series`
 - `PUT /api/entries/:id?type=movie|series`
-- `DELETE /api/entries/:id?type=movie|series`
+- `DELETE /api/entries/:id?type=movie|series&userId=<id>&userEmail=<email>&listId=<listId>`
+
+## Lists and Sharing
+
+Signed-in users get a default `My List` and can create more watched lists from the Watching List panel.
+
+- Owners can create, rename, and delete their own lists.
+- Deleting a list also deletes the entries and shares for that list.
+- Existing entries without a saved `listId` are treated as part of the owner's default list.
+
+Users can share the currently selected owned list from the Share modal. Sharing is based on the recipient's Google account email.
+
+- `View only` lets another user open and browse the shared list.
+- `Can edit` lets another user add, edit, and delete entries in the shared list.
+- Owners can update or remove access at any time.
+- Shared users can switch between their own lists and lists shared with them from the Watching List selector.
 
 ## Deployment
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Movie, Series, EntryType } from './types';
+import { Movie, Series, EntryType, Share, SharedList, SharePermission, WatchList } from './types';
 import { 
   Plus, 
   Film, 
@@ -10,7 +10,11 @@ import {
   Search, 
   X,
   Loader2,
-  LogOut
+  LogOut,
+  Share2,
+  Users,
+  Eye,
+  Pencil
 } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, signInWithGoogle, logout } from './firebase';
@@ -50,6 +54,17 @@ export default function App() {
   const [tmdbSearchLoading, setTmdbSearchLoading] = useState(false);
   const [tmdbSearchError, setTmdbSearchError] = useState('');
   const [tmdbSearchLocked, setTmdbSearchLocked] = useState(false);
+  const [ownedLists, setOwnedLists] = useState<WatchList[]>([]);
+  const [ownedShares, setOwnedShares] = useState<Share[]>([]);
+  const [sharedWithMe, setSharedWithMe] = useState<Share[]>([]);
+  const [activeListId, setActiveListId] = useState('');
+  const [newListName, setNewListName] = useState('');
+  const [renameListName, setRenameListName] = useState('');
+  const [listSaving, setListSaving] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [shareEmail, setShareEmail] = useState('');
+  const [sharePermission, setSharePermission] = useState<SharePermission>('view');
+  const [shareSaving, setShareSaving] = useState(false);
   
   // Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -65,10 +80,82 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
+      setActiveListId('');
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
+
+  const fetchLists = useCallback(async () => {
+    if (!user?.uid || !user.email) {
+      setOwnedLists([]);
+      setOwnedShares([]);
+      setSharedWithMe([]);
+      return;
+    }
+
+    try {
+      await fetch('/api/users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user.uid,
+          email: user.email,
+          displayName: user.displayName || '',
+          photoUrl: user.photoURL || '',
+        }),
+      });
+
+      const response = await fetch(`/api/lists?userId=${encodeURIComponent(user.uid)}&email=${encodeURIComponent(user.email)}&displayName=${encodeURIComponent(user.displayName || '')}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Failed to fetch lists');
+      }
+
+      const nextOwnedLists = (data?.ownedLists as WatchList[] | undefined) || [];
+      setOwnedLists(nextOwnedLists);
+      setSharedWithMe((data?.sharedWithMe as Share[] | undefined) || []);
+
+      if (!activeListId && nextOwnedLists[0]?.id) {
+        setActiveListId(nextOwnedLists[0].id);
+      }
+    } catch (error) {
+      console.error('List fetch error:', error);
+      toast.error('Failed to load watching lists.');
+    }
+  }, [activeListId, user]);
+
+  const fetchShares = useCallback(async (listId = activeListId) => {
+    if (!user?.uid || !user.email || !listId) {
+      setOwnedShares([]);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/shares?userId=${encodeURIComponent(user.uid)}&email=${encodeURIComponent(user.email)}&listId=${encodeURIComponent(listId)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Failed to fetch shares');
+      }
+
+      setOwnedShares((data?.ownedShares as Share[] | undefined) || []);
+    } catch (error) {
+      console.error('Share fetch error:', error);
+      toast.error('Failed to load sharing settings.');
+    }
+  }, [activeListId, user?.email, user?.uid]);
+
+  useEffect(() => {
+    void fetchLists();
+  }, [fetchLists]);
+
+  useEffect(() => {
+    void fetchShares();
+  }, [fetchShares]);
 
   const handlePosterFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -105,16 +192,22 @@ export default function App() {
   const fetchEntries = useCallback(async () => {
     setLoading(true);
     try {
-      if (!user?.uid) {
+      if (!user?.uid || !activeListId) {
         setMovies([]);
         setSeries([]);
         setLoading(false);
         return;
       }
 
+      const entryQuery = new URLSearchParams({
+        userId: user.uid,
+        userEmail: user.email || '',
+        listId: activeListId,
+      });
+
       const [moviesResponse, seriesResponse] = await Promise.all([
-        fetch(`/api/entries?type=movie&userId=${encodeURIComponent(user.uid)}`),
-        fetch(`/api/entries?type=series&userId=${encodeURIComponent(user.uid)}`),
+        fetch(`/api/entries?type=movie&${entryQuery.toString()}`),
+        fetch(`/api/entries?type=series&${entryQuery.toString()}`),
       ]);
 
       if (!moviesResponse.ok || !seriesResponse.ok) {
@@ -134,7 +227,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [user?.uid]);
+  }, [activeListId, user?.email, user?.uid]);
 
   useEffect(() => {
     fetchEntries();
@@ -151,6 +244,48 @@ export default function App() {
     document.addEventListener('pointerdown', handlePointerDown);
     return () => document.removeEventListener('pointerdown', handlePointerDown);
   }, []);
+
+  const sharedLists = useMemo<SharedList[]>(() => {
+    return [
+      ...ownedLists.map((list) => ({
+        id: list.id,
+        name: list.name,
+        ownerUserId: list.ownerUserId,
+        ownerEmail: list.ownerEmail,
+        ownerName: list.ownerName || 'My List',
+        permission: 'owner',
+        isDefault: list.isDefault,
+      }) as SharedList),
+      ...sharedWithMe.map((share) => ({
+        id: share.listId,
+        name: share.listName || 'Shared List',
+        ownerUserId: share.ownerUserId,
+        ownerEmail: share.ownerEmail,
+        ownerName: share.ownerName || share.ownerEmail,
+        permission: share.permission,
+      })),
+    ];
+  }, [ownedLists, sharedWithMe]);
+
+  const activeList = useMemo(() => {
+    return sharedLists.find((list) => list.id === activeListId) || sharedLists[0];
+  }, [activeListId, sharedLists]);
+
+  const canEditActiveList = activeList?.permission === 'owner' || activeList?.permission === 'edit';
+
+  useEffect(() => {
+    if (!sharedLists.length) {
+      return;
+    }
+
+    if (!sharedLists.some((list) => list.id === activeListId)) {
+      setActiveListId(sharedLists[0].id);
+    }
+  }, [activeListId, sharedLists]);
+
+  useEffect(() => {
+    setRenameListName(activeList?.permission === 'owner' ? activeList.name : '');
+  }, [activeList?.id, activeList?.name, activeList?.permission]);
 
   const filteredEntries = useMemo(() => {
     const list = activeTab === 'movie' ? movies : series;
@@ -170,6 +305,11 @@ export default function App() {
   }, [activeTab, movies, series, searchQuery, sortBy]);
 
   const handleOpenModal = (entry?: Movie | Series) => {
+    if (!canEditActiveList) {
+      toast.error('You only have view access to this list.');
+      return;
+    }
+
     if (entry) {
       setEditingEntry(entry);
       setFormData({
@@ -269,6 +409,11 @@ export default function App() {
       return;
     }
 
+    if (!canEditActiveList || !activeList?.id) {
+      toast.error('You only have view access to this list.');
+      return;
+    }
+
     if (!formData.posterUrl) {
       toast.error(`Please select a ${activeTab === 'movie' ? 'movie' : 'series'} from TMDb search or add a poster image.`);
       return;
@@ -280,6 +425,8 @@ export default function App() {
         posterUrl: formData.posterUrl,
         rating: Number(formData.rating),
         userId: user.uid,
+        userEmail: user.email || '',
+        listId: activeList.id,
         ...(activeTab === 'series' ? {
           currentSeason: Number(formData.currentSeason),
           currentEpisode: Number(formData.currentEpisode)
@@ -324,9 +471,20 @@ export default function App() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!user?.uid || !canEditActiveList) {
+      toast.error('You only have view access to this list.');
+      return;
+    }
+
     if (!window.confirm("Are you sure you want to delete this entry?")) return;
     try {
-      const response = await fetch(`/api/entries/${id}?type=${activeTab}`, {
+      const deleteQuery = new URLSearchParams({
+        type: activeTab,
+        userId: user.uid,
+        userEmail: user.email || '',
+        listId: activeList?.id || '',
+      });
+      const response = await fetch(`/api/entries/${id}?${deleteQuery.toString()}`, {
         method: 'DELETE',
       });
 
@@ -339,6 +497,226 @@ export default function App() {
     } catch (error) {
       console.error("Delete error:", error);
       toast.error("Failed to delete entry.");
+    }
+  };
+
+  const handleShareSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!user?.uid || !user.email || !activeList?.id || activeList.permission !== 'owner') {
+      toast.error('Only the list owner can share this list.');
+      return;
+    }
+
+    const trimmedEmail = shareEmail.trim().toLowerCase();
+    if (!trimmedEmail) {
+      toast.error('Enter an email address to share with.');
+      return;
+    }
+
+    setShareSaving(true);
+    try {
+      const response = await fetch('/api/shares', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ownerUserId: user.uid,
+          ownerEmail: user.email,
+          ownerName: user.displayName || user.email,
+          listId: activeList.id,
+          recipientEmail: trimmedEmail,
+          permission: sharePermission,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Share failed');
+      }
+
+      setShareEmail('');
+      setSharePermission('view');
+      toast.success('Sharing access saved.');
+      await fetchShares(activeList.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to share list.';
+      toast.error(message);
+    } finally {
+      setShareSaving(false);
+    }
+  };
+
+  const handleCreateList = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!user?.uid || !user.email) {
+      toast.error('You must be signed in to create lists.');
+      return;
+    }
+
+    const name = newListName.trim();
+    if (!name) {
+      toast.error('Enter a list name.');
+      return;
+    }
+
+    setListSaving(true);
+    try {
+      const response = await fetch('/api/lists', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ownerUserId: user.uid,
+          ownerEmail: user.email,
+          ownerName: user.displayName || user.email,
+          name,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Create list failed');
+      }
+
+      setNewListName('');
+      await fetchLists();
+      setActiveListId(data.id);
+      toast.success('List created.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create list.';
+      toast.error(message);
+    } finally {
+      setListSaving(false);
+    }
+  };
+
+  const handleRenameList = async () => {
+    if (!user?.uid || !activeList?.id || activeList.permission !== 'owner') {
+      toast.error('Only the list owner can rename this list.');
+      return;
+    }
+
+    const name = renameListName.trim();
+    if (!name) {
+      toast.error('Enter a list name.');
+      return;
+    }
+
+    setListSaving(true);
+    try {
+      const response = await fetch(`/api/lists/${activeList.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ownerUserId: user.uid,
+          name,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Rename list failed');
+      }
+
+      await fetchLists();
+      await fetchShares(activeList.id);
+      toast.success('List renamed.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to rename list.';
+      toast.error(message);
+    } finally {
+      setListSaving(false);
+    }
+  };
+
+  const handleDeleteList = async () => {
+    if (!user?.uid || !activeList?.id || activeList.permission !== 'owner') {
+      toast.error('Only the list owner can delete this list.');
+      return;
+    }
+
+    if (!window.confirm(`Delete "${activeList.name}" and all entries in it?`)) {
+      return;
+    }
+
+    setListSaving(true);
+    try {
+      const response = await fetch(`/api/lists/${activeList.id}?ownerUserId=${encodeURIComponent(user.uid)}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data?.message || 'Delete list failed');
+      }
+
+      setActiveListId('');
+      await fetchLists();
+      toast.success('List deleted.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete list.';
+      toast.error(message);
+    } finally {
+      setListSaving(false);
+    }
+  };
+
+  const handleUpdateSharePermission = async (share: Share, permission: SharePermission) => {
+    if (!user?.uid) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/shares/${share.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ownerUserId: user.uid,
+          permission,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data?.message || 'Update failed');
+      }
+
+      await fetchShares();
+      toast.success('Access updated.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update access.';
+      toast.error(message);
+    }
+  };
+
+  const handleRemoveShare = async (share: Share) => {
+    if (!user?.uid) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/shares/${share.id}?ownerUserId=${encodeURIComponent(user.uid)}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data?.message || 'Remove failed');
+      }
+
+      await fetchShares();
+      toast.success('Access removed.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to remove access.';
+      toast.error(message);
     }
   };
 
@@ -443,6 +821,101 @@ export default function App() {
       </header>
 
       <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-6 space-y-4 rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-neutral-800 text-sky-400">
+                <Users className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-medium uppercase text-neutral-500">Watching List</p>
+                <p className="truncate text-sm font-semibold text-white">
+                  {activeList?.permission === 'owner' ? activeList?.name : `${activeList?.ownerName || activeList?.ownerEmail} / ${activeList?.name}`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <select
+                value={activeListId}
+                onChange={(event) => setActiveListId(event.target.value)}
+                className="bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400"
+              >
+                {sharedLists.map((list) => (
+                  <option key={list.id} value={list.id}>
+                    {list.permission === 'owner' ? list.name : `${list.ownerName || list.ownerEmail} / ${list.name} (${list.permission})`}
+                  </option>
+                ))}
+              </select>
+
+              <div className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs font-semibold text-neutral-300">
+                {canEditActiveList ? <Pencil className="h-4 w-4 text-sky-400" /> : <Eye className="h-4 w-4 text-neutral-500" />}
+                {canEditActiveList ? 'Can edit' : 'View only'}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsShareModalOpen(true)}
+                disabled={activeList?.permission !== 'owner'}
+                className={cn(
+                  "flex items-center justify-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:border-sky-400/60",
+                  activeList?.permission !== 'owner' && "cursor-not-allowed opacity-50"
+                )}
+              >
+                <Share2 className="h-4 w-4" />
+                Share
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-3 border-t border-neutral-800 pt-4 lg:grid-cols-[1fr_1fr_auto]">
+            <form onSubmit={handleCreateList} className="flex gap-2">
+              <input
+                type="text"
+                value={newListName}
+                onChange={(event) => setNewListName(event.target.value)}
+                placeholder="New list name"
+                className="min-w-0 flex-1 bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400"
+              />
+              <button
+                type="submit"
+                disabled={listSaving}
+                className="rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Create
+              </button>
+            </form>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={renameListName}
+                onChange={(event) => setRenameListName(event.target.value)}
+                disabled={activeList?.permission !== 'owner'}
+                placeholder="Rename selected list"
+                className="min-w-0 flex-1 bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+              <button
+                type="button"
+                onClick={() => void handleRenameList()}
+                disabled={listSaving || activeList?.permission !== 'owner'}
+                className="rounded-xl border border-neutral-800 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:border-sky-400/60 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Rename
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void handleDeleteList()}
+              disabled={listSaving || activeList?.permission !== 'owner'}
+              className="rounded-xl border border-red-500/30 px-4 py-2.5 text-sm font-semibold text-red-300 transition-colors hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Delete List
+            </button>
+          </div>
+        </div>
+
         {/* Navigation & Actions */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-10">
           <div className="flex p-1 bg-neutral-900 rounded-2xl w-fit border border-neutral-800">
@@ -480,7 +953,11 @@ export default function App() {
             </select>
             <button 
               onClick={() => handleOpenModal()}
-              className="flex items-center gap-2 bg-white text-black px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-neutral-200 transition-all active:scale-95 shadow-lg shadow-white/5"
+              disabled={!canEditActiveList}
+              className={cn(
+                "flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold transition-all active:scale-95 shadow-lg shadow-white/5",
+                canEditActiveList ? "bg-white text-black hover:bg-neutral-200" : "cursor-not-allowed bg-neutral-800 text-neutral-500"
+              )}
             >
               <Plus className="w-4 h-4" />
               Add {activeTab === 'movie' ? 'Movie' : 'Series'}
@@ -518,31 +995,33 @@ export default function App() {
                   />
                   
                   {/* Overlay Actions */}
-                  <div
-                    className={cn(
-                      'absolute inset-0 bg-black/60 transition-opacity flex flex-col items-center justify-center gap-3',
-                      activeEntryId === item.id ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
-                    )}
-                  >
-                    <button 
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleOpenModal(item);
-                      }}
-                      className="w-10 h-10 bg-white text-black rounded-full flex items-center justify-center hover:scale-110 transition-transform"
+                  {canEditActiveList && (
+                    <div
+                      className={cn(
+                        'absolute inset-0 bg-black/60 transition-opacity flex flex-col items-center justify-center gap-3',
+                        activeEntryId === item.id ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+                      )}
                     >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button 
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleDelete(item.id);
-                      }}
-                      className="w-10 h-10 bg-red-500 text-white rounded-full flex items-center justify-center hover:scale-110 transition-transform"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                      <button 
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleOpenModal(item);
+                        }}
+                        className="w-10 h-10 bg-white text-black rounded-full flex items-center justify-center hover:scale-110 transition-transform"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleDelete(item.id);
+                        }}
+                        className="w-10 h-10 bg-red-500 text-white rounded-full flex items-center justify-center hover:scale-110 transition-transform"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
 
                   {/* Rating Badge */}
                   <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md px-2 py-1 rounded-lg flex items-center gap-1 border border-white/10">
@@ -579,6 +1058,98 @@ export default function App() {
       <footer className="mt-auto border-t border-neutral-800/50 py-6 text-center text-sm text-neutral-500">
         © 2026 Created by Thit Lwin Win Thant.
       </footer>
+
+      <AnimatePresence>
+        {isShareModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsShareModalOpen(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-xl bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden shadow-2xl"
+            >
+              <div className="p-6 border-b border-neutral-800 flex items-center justify-between">
+                <h2 className="text-xl font-bold">Share My List</h2>
+                <button onClick={() => setIsShareModalOpen(false)} className="p-2 text-neutral-500 hover:text-white transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-6">
+                <form onSubmit={handleShareSubmit} className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                  <input
+                    required
+                    type="email"
+                    value={shareEmail}
+                    onChange={(event) => setShareEmail(event.target.value)}
+                    placeholder="friend@example.com"
+                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400 transition-colors"
+                  />
+                  <select
+                    value={sharePermission}
+                    onChange={(event) => setSharePermission(event.target.value as SharePermission)}
+                    className="bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400"
+                  >
+                    <option value="view">View only</option>
+                    <option value="edit">Can edit</option>
+                  </select>
+                  <button
+                    type="submit"
+                    disabled={shareSaving}
+                    className="rounded-xl bg-sky-400 px-5 py-3 text-sm font-bold text-black transition-all hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {shareSaving ? 'Sharing...' : 'Share'}
+                  </button>
+                </form>
+
+                <div className="space-y-3">
+                  <h3 className="text-sm font-semibold text-neutral-300">People with access</h3>
+                  {ownedShares.length === 0 ? (
+                    <p className="rounded-xl border border-neutral-800 bg-neutral-950 p-4 text-sm text-neutral-500">
+                      No one has access yet.
+                    </p>
+                  ) : (
+                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                      {ownedShares.map((share) => (
+                        <div key={share.id} className="flex flex-col gap-3 rounded-xl border border-neutral-800 bg-neutral-950 p-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-white">{share.recipientEmail}</p>
+                            <p className="text-xs text-neutral-500">{share.permission === 'edit' ? 'Can edit your list' : 'Can view your list'}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={share.permission}
+                              onChange={(event) => void handleUpdateSharePermission(share, event.target.value as SharePermission)}
+                              className="bg-neutral-900 border border-neutral-800 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-sky-400"
+                            >
+                              <option value="view">View only</option>
+                              <option value="edit">Can edit</option>
+                            </select>
+                            <button
+                              type="button"
+                              onClick={() => void handleRemoveShare(share)}
+                              className="rounded-lg border border-red-500/30 px-3 py-2 text-xs font-semibold text-red-300 transition-colors hover:bg-red-500/10"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Modal */}
       <AnimatePresence>
