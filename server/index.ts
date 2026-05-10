@@ -50,6 +50,7 @@ type BaseEntryPayload = {
   title: string;
   posterUrl: string;
   rating: number;
+  review?: string;
 };
 
 type SeriesPayload = BaseEntryPayload & {
@@ -75,6 +76,15 @@ type WatchListDocument = {
   ownerEmail: string;
   ownerName: string;
   isDefault: boolean;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+type FolderDocument = {
+  name: string;
+  type: EntryType;
+  listId: string;
+  ownerUserId: string;
   createdAt: string;
   updatedAt?: string;
 };
@@ -109,6 +119,14 @@ function estimateDataUrlBytes(dataUrl: string): number | null {
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+function validateEntryType(type: string): EntryType {
+  if (type === 'movie' || type === 'series') {
+    return type;
+  }
+
+  throw new Error('Invalid type. Expected movie or series.');
 }
 
 function validatePermission(permission: string): SharePermission {
@@ -210,6 +228,29 @@ function buildLegacyEntryQuery(ownerUserId: string, list: Document): Document {
   };
 }
 
+async function validateFolderForEntry(folderId: string, listId: string, type: EntryType): Promise<string> {
+  const trimmedFolderId = folderId.trim();
+  if (!trimmedFolderId) {
+    return '';
+  }
+
+  if (!ObjectId.isValid(trimmedFolderId)) {
+    throw new Error('Invalid folderId');
+  }
+
+  const folder = await db.collection<FolderDocument>('folders').findOne({
+    _id: new ObjectId(trimmedFolderId),
+    listId,
+    type,
+  });
+
+  if (!folder) {
+    throw new Error('Folder not found');
+  }
+
+  return trimmedFolderId;
+}
+
 function canEditAccess(access: 'owner' | SharePermission | null): boolean {
   return access === 'owner' || access === 'edit';
 }
@@ -237,6 +278,7 @@ function validateBasePayload(payload: Partial<BaseEntryPayload>): BaseEntryPaylo
     title: String(payload.title).trim(),
     posterUrl,
     rating: Number(payload.rating),
+    review: String(payload.review || '').trim(),
   };
 }
 
@@ -411,6 +453,135 @@ app.delete('/api/lists/:id', async (req, res) => {
     return res.status(204).send();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to delete list';
+    return res.status(400).json({ message });
+  }
+});
+
+app.get('/api/folders', async (req, res) => {
+  try {
+    const userId = String(req.query.userId || '').trim();
+    const userEmail = String(req.query.userEmail || '');
+    const listId = String(req.query.listId || '').trim();
+    const type = validateEntryType(String(req.query.type || ''));
+
+    if (!userId || !listId) {
+      return res.status(400).json({ message: 'userId and listId query parameters are required' });
+    }
+
+    const { access, list } = await getListAccessById(listId, userId, userEmail);
+    if (!access || !list) {
+      return res.status(403).json({ message: 'You do not have access to this list.' });
+    }
+
+    const folders = await db
+      .collection<FolderDocument>('folders')
+      .find({ listId, type })
+      .sort({ name: 1 })
+      .toArray();
+
+    return res.json({ folders: folders.map(serializeDocument) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to fetch folders';
+    return res.status(400).json({ message });
+  }
+});
+
+app.post('/api/folders', async (req, res) => {
+  try {
+    const userId = String(req.body.userId || '').trim();
+    const userEmail = String(req.body.userEmail || '');
+    const listId = String(req.body.listId || '').trim();
+    const type = validateEntryType(String(req.body.type || ''));
+    const name = String(req.body.name || '').trim();
+
+    if (!userId || !listId || !name) {
+      return res.status(400).json({ message: 'userId, listId and name are required' });
+    }
+
+    const { access, list } = await getListAccessById(listId, userId, userEmail);
+    if (!canEditAccess(access) || !list) {
+      return res.status(403).json({ message: 'You only have view access to this list.' });
+    }
+
+    const now = new Date().toISOString();
+    const document: FolderDocument = {
+      name,
+      type,
+      listId,
+      ownerUserId: String(list.ownerUserId || ''),
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const result = await db.collection<FolderDocument>('folders').insertOne(document);
+    return res.status(201).json({ ...document, id: result.insertedId.toString() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to create folder';
+    return res.status(400).json({ message });
+  }
+});
+
+app.put('/api/folders/:id', async (req, res) => {
+  try {
+    const userId = String(req.body.userId || '').trim();
+    const userEmail = String(req.body.userEmail || '');
+    const name = String(req.body.name || '').trim();
+
+    if (!userId || !name) {
+      return res.status(400).json({ message: 'userId and name are required' });
+    }
+
+    const folder = await db.collection<FolderDocument>('folders').findOne({ _id: new ObjectId(req.params.id) });
+    if (!folder) {
+      return res.status(404).json({ message: 'Folder not found' });
+    }
+
+    const { access } = await getListAccessById(folder.listId, userId, userEmail);
+    if (!canEditAccess(access)) {
+      return res.status(403).json({ message: 'You only have view access to this list.' });
+    }
+
+    const result = await db.collection<FolderDocument>('folders').findOneAndUpdate(
+      { _id: new ObjectId(req.params.id) },
+      { $set: { name, updatedAt: new Date().toISOString() } },
+      { returnDocument: 'after' },
+    );
+
+    return res.json(result ? serializeDocument(result) : null);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to rename folder';
+    return res.status(400).json({ message });
+  }
+});
+
+app.delete('/api/folders/:id', async (req, res) => {
+  try {
+    const userId = String(req.query.userId || '').trim();
+    const userEmail = String(req.query.userEmail || '');
+
+    if (!userId) {
+      return res.status(400).json({ message: 'userId query parameter is required' });
+    }
+
+    const folder = await db.collection<FolderDocument>('folders').findOne({ _id: new ObjectId(req.params.id) });
+    if (!folder) {
+      return res.status(404).json({ message: 'Folder not found' });
+    }
+
+    const { access } = await getListAccessById(folder.listId, userId, userEmail);
+    if (!canEditAccess(access)) {
+      return res.status(403).json({ message: 'You only have view access to this list.' });
+    }
+
+    const collectionName = getCollectionName(folder.type);
+    await Promise.all([
+      db.collection(collectionName).updateMany({ folderId: req.params.id }, { $unset: { folderId: '' } }),
+      db.collection<FolderDocument>('folders').deleteOne({ _id: new ObjectId(req.params.id) }),
+    ]);
+
+    return res.status(204).send();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to delete folder';
     return res.status(400).json({ message });
   }
 });
@@ -604,7 +775,7 @@ app.get('/api/tmdb/search', async (req, res) => {
 
 app.get('/api/entries', async (req, res) => {
   try {
-    const type = String(req.query.type || '') as EntryType;
+    const type = validateEntryType(String(req.query.type || ''));
     const userId = String(req.query.userId || '').trim();
     const userEmail = String(req.query.userEmail || '');
     const listId = String(req.query.listId || '').trim();
@@ -638,7 +809,7 @@ app.get('/api/entries', async (req, res) => {
 
 app.post('/api/entries', async (req, res) => {
   try {
-    const type = String(req.query.type || '') as EntryType;
+    const type = validateEntryType(String(req.query.type || ''));
     const collectionName = getCollectionName(type);
     const currentUserId = String(req.body.userId || '').trim();
     const currentUserEmail = String(req.body.userEmail || '');
@@ -658,10 +829,12 @@ app.post('/api/entries', async (req, res) => {
     }
 
     const payload = type === 'series' ? validateSeriesPayload(req.body) : validateBasePayload(req.body);
+    const folderId = await validateFolderForEntry(String(req.body.folderId || ''), listId, type);
     const document = {
       ...payload,
       userId: String(list.ownerUserId || ''),
       listId,
+      ...(folderId ? { folderId } : {}),
       createdByUserId: currentUserId,
       createdAt: new Date().toISOString(),
     };
@@ -677,7 +850,7 @@ app.post('/api/entries', async (req, res) => {
 
 app.put('/api/entries/:id', async (req, res) => {
   try {
-    const type = String(req.query.type || '') as EntryType;
+    const type = validateEntryType(String(req.query.type || ''));
     const id = req.params.id;
     const collectionName = getCollectionName(type);
     const currentUserId = String(req.body.userId || '').trim();
@@ -702,6 +875,7 @@ app.put('/api/entries/:id', async (req, res) => {
     }
 
     const payload = type === 'series' ? validateSeriesPayload(req.body) : validateBasePayload(req.body);
+    const nextFolderId = await validateFolderForEntry(String(req.body.folderId || ''), entryListId, type);
 
     await db.collection(collectionName).updateOne(
       { _id: new ObjectId(id) },
@@ -710,13 +884,15 @@ app.put('/api/entries/:id', async (req, res) => {
           ...payload,
           userId: ownerUserId,
           ...(entryListId ? { listId: entryListId } : {}),
+          ...(nextFolderId ? { folderId: nextFolderId } : {}),
           updatedByUserId: currentUserId,
           updatedAt: new Date().toISOString(),
         },
+        ...(nextFolderId ? {} : { $unset: { folderId: '' } }),
       },
     );
 
-    return res.json({ id, ...payload });
+    return res.json({ id, ...payload, folderId: nextFolderId });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to update entry';
     return res.status(400).json({ message });
@@ -725,7 +901,7 @@ app.put('/api/entries/:id', async (req, res) => {
 
 app.delete('/api/entries/:id', async (req, res) => {
   try {
-    const type = String(req.query.type || '') as EntryType;
+    const type = validateEntryType(String(req.query.type || ''));
     const id = req.params.id;
     const currentUserId = String(req.query.userId || '').trim();
     const currentUserEmail = String(req.query.userEmail || '');

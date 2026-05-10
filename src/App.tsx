@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Movie, Series, EntryType, Share, SharedList, SharePermission, WatchList } from './types';
+import { Movie, Series, EntryType, Share, SharedList, SharePermission, WatchList, Folder } from './types';
 import { 
   Plus, 
   Film, 
@@ -14,7 +14,11 @@ import {
   Share2,
   Users,
   Eye,
-  Pencil
+  Pencil,
+  Folder as FolderIcon,
+  MoreHorizontal,
+  ListPlus,
+  FolderPlus
 } from 'lucide-react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, signInWithGoogle, logout } from './firebase';
@@ -35,6 +39,10 @@ type TmdbSearchResult = {
   voteAverage: number;
 };
 
+function getTmdbResultKey(result: TmdbSearchResult) {
+  return `${result.mediaType}-${result.id}`;
+}
+
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
@@ -51,13 +59,21 @@ export default function App() {
   const [sortBy, setSortBy] = useState<'rating' | 'title' | 'newest'>('newest');
   const [tmdbSearchQuery, setTmdbSearchQuery] = useState('');
   const [tmdbSearchResults, setTmdbSearchResults] = useState<TmdbSearchResult[]>([]);
+  const [selectedTmdbResultIds, setSelectedTmdbResultIds] = useState<string[]>([]);
   const [tmdbSearchLoading, setTmdbSearchLoading] = useState(false);
   const [tmdbSearchError, setTmdbSearchError] = useState('');
   const [tmdbSearchLocked, setTmdbSearchLocked] = useState(false);
   const [ownedLists, setOwnedLists] = useState<WatchList[]>([]);
   const [ownedShares, setOwnedShares] = useState<Share[]>([]);
   const [sharedWithMe, setSharedWithMe] = useState<Share[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [activeFolderId, setActiveFolderId] = useState('all');
+  const [newFolderName, setNewFolderName] = useState('');
+  const [renameFolderName, setRenameFolderName] = useState('');
+  const [folderSaving, setFolderSaving] = useState(false);
   const [activeListId, setActiveListId] = useState('');
+  const [openListMenuId, setOpenListMenuId] = useState<string | null>(null);
+  const [openFolderMenuId, setOpenFolderMenuId] = useState<string | null>(null);
   const [newListName, setNewListName] = useState('');
   const [renameListName, setRenameListName] = useState('');
   const [listSaving, setListSaving] = useState(false);
@@ -69,10 +85,13 @@ export default function App() {
   // Form State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<Movie | Series | null>(null);
+  const [detailEntry, setDetailEntry] = useState<Movie | Series | null>(null);
   const [formData, setFormData] = useState({
     title: '',
     posterUrl: '',
     rating: 5,
+    review: '',
+    folderId: '',
     currentSeason: 1,
     currentEpisode: 1
   });
@@ -157,6 +176,40 @@ export default function App() {
     void fetchShares();
   }, [fetchShares]);
 
+  const fetchFolders = useCallback(async () => {
+    if (!user?.uid || !activeListId) {
+      setFolders([]);
+      return;
+    }
+
+    try {
+      const folderQuery = new URLSearchParams({
+        userId: user.uid,
+        userEmail: user.email || '',
+        listId: activeListId,
+        type: activeTab,
+      });
+      const response = await fetch(`/api/folders?${folderQuery.toString()}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Failed to fetch folders');
+      }
+
+      setFolders((data?.folders as Folder[] | undefined) || []);
+    } catch (error) {
+      console.error('Folder fetch error:', error);
+      toast.error('Failed to load folders.');
+    }
+  }, [activeListId, activeTab, user?.email, user?.uid]);
+
+  useEffect(() => {
+    setActiveFolderId('all');
+    setNewFolderName('');
+    setRenameFolderName('');
+    void fetchFolders();
+  }, [fetchFolders]);
+
   const handlePosterFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
@@ -239,6 +292,10 @@ export default function App() {
       if (!target?.closest('[data-entry-card="true"]')) {
         setActiveEntryId(null);
       }
+      if (!target?.closest('[data-overflow-menu="true"]')) {
+        setOpenListMenuId(null);
+        setOpenFolderMenuId(null);
+      }
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -272,6 +329,9 @@ export default function App() {
   }, [activeListId, sharedLists]);
 
   const canEditActiveList = activeList?.permission === 'owner' || activeList?.permission === 'edit';
+  const activeFolder = useMemo(() => {
+    return folders.find((folder) => folder.id === activeFolderId) || null;
+  }, [activeFolderId, folders]);
 
   useEffect(() => {
     if (!sharedLists.length) {
@@ -287,11 +347,21 @@ export default function App() {
     setRenameListName(activeList?.permission === 'owner' ? activeList.name : '');
   }, [activeList?.id, activeList?.name, activeList?.permission]);
 
+  useEffect(() => {
+    setRenameFolderName(activeFolder?.name || '');
+  }, [activeFolder?.id, activeFolder?.name]);
+
   const filteredEntries = useMemo(() => {
     const list = activeTab === 'movie' ? movies : series;
     let result = list.filter(item => 
       item.title.toLowerCase().includes(searchQuery.toLowerCase())
     );
+
+    if (activeFolderId === 'unfiled') {
+      result = result.filter((item) => !item.folderId);
+    } else if (activeFolderId !== 'all') {
+      result = result.filter((item) => item.folderId === activeFolderId);
+    }
 
     if (sortBy === 'rating') {
       result.sort((a, b) => b.rating - a.rating);
@@ -302,7 +372,20 @@ export default function App() {
     }
 
     return result;
-  }, [activeTab, movies, series, searchQuery, sortBy]);
+  }, [activeFolderId, activeTab, movies, series, searchQuery, sortBy]);
+
+  const folderEntryCounts = useMemo(() => {
+    const entries = activeTab === 'movie' ? movies : series;
+    return folders.reduce<Record<string, number>>((counts, folder) => {
+      counts[folder.id] = entries.filter((entry) => entry.folderId === folder.id).length;
+      return counts;
+    }, {});
+  }, [activeTab, folders, movies, series]);
+
+  const unfiledEntryCount = useMemo(() => {
+    const entries = activeTab === 'movie' ? movies : series;
+    return entries.filter((entry) => !entry.folderId).length;
+  }, [activeTab, movies, series]);
 
   const handleOpenModal = (entry?: Movie | Series) => {
     if (!canEditActiveList) {
@@ -316,6 +399,8 @@ export default function App() {
         title: entry.title,
         posterUrl: entry.posterUrl,
         rating: entry.rating,
+        review: entry.review || '',
+        folderId: entry.folderId || '',
         currentSeason: (entry as Series).currentSeason || 1,
         currentEpisode: (entry as Series).currentEpisode || 1
       });
@@ -327,6 +412,8 @@ export default function App() {
         title: '',
         posterUrl: '',
         rating: 5,
+        review: '',
+        folderId: activeFolderId === 'all' || activeFolderId === 'unfiled' ? '' : activeFolderId,
         currentSeason: 1,
         currentEpisode: 1
       });
@@ -334,6 +421,7 @@ export default function App() {
       setTmdbSearchLocked(false);
     }
     setTmdbSearchResults([]);
+    setSelectedTmdbResultIds([]);
     setTmdbSearchError('');
     setIsModalOpen(true);
   };
@@ -343,6 +431,7 @@ export default function App() {
 
     if (!trimmedQuery) {
       setTmdbSearchResults([]);
+      setSelectedTmdbResultIds([]);
       setTmdbSearchError('');
       return;
     }
@@ -360,17 +449,20 @@ export default function App() {
 
       if (data?.error) {
         setTmdbSearchResults([]);
+        setSelectedTmdbResultIds([]);
         setTmdbSearchError(data.error);
         return;
       }
 
       setTmdbSearchResults((data?.results as TmdbSearchResult[] | undefined) || []);
+      setSelectedTmdbResultIds([]);
       if (!data?.results?.length) {
         setTmdbSearchError(`No ${activeTab === 'movie' ? 'movies' : 'series'} matched your search.`);
       }
     } catch (error) {
       console.error('TMDb search error:', error);
       setTmdbSearchResults([]);
+      setSelectedTmdbResultIds([]);
       setTmdbSearchError(`Failed to search ${activeTab === 'movie' ? 'movies' : 'series'}.`);
     } finally {
       setTmdbSearchLoading(false);
@@ -390,6 +482,22 @@ export default function App() {
   }, [handleTmdbSearch, isModalOpen, tmdbSearchLocked, tmdbSearchQuery]);
 
   const handleSelectTmdbResult = (result: TmdbSearchResult) => {
+    if (!editingEntry) {
+      const resultKey = getTmdbResultKey(result);
+      setSelectedTmdbResultIds((currentIds) =>
+        currentIds.includes(resultKey)
+          ? currentIds.filter((id) => id !== resultKey)
+          : [...currentIds, resultKey],
+      );
+      setFormData((prev) => ({
+        ...prev,
+        title: result.title,
+        posterUrl: result.posterUrl || DEFAULT_POSTER_FALLBACK,
+      }));
+      setTmdbSearchError('');
+      return;
+    }
+
     setFormData((prev) => ({
       ...prev,
       title: result.title,
@@ -399,6 +507,21 @@ export default function App() {
     setTmdbSearchLocked(true);
     setTmdbSearchResults([]);
     setTmdbSearchError('');
+  };
+
+  const handleToggleAllTmdbResults = () => {
+    const allResultIds = tmdbSearchResults.map(getTmdbResultKey);
+    const everyResultSelected = allResultIds.every((id) => selectedTmdbResultIds.includes(id));
+
+    setSelectedTmdbResultIds(everyResultSelected ? [] : allResultIds);
+
+    if (!everyResultSelected && tmdbSearchResults[0]) {
+      setFormData((prev) => ({
+        ...prev,
+        title: tmdbSearchResults[0].title,
+        posterUrl: tmdbSearchResults[0].posterUrl || DEFAULT_POSTER_FALLBACK,
+      }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -414,24 +537,32 @@ export default function App() {
       return;
     }
 
-    if (!formData.posterUrl) {
+    const selectedTmdbResults = tmdbSearchResults.filter((result) =>
+      selectedTmdbResultIds.includes(getTmdbResultKey(result)),
+    );
+    const isBatchCreate = !editingEntry && selectedTmdbResults.length > 0;
+
+    if (!isBatchCreate && !formData.posterUrl) {
       toast.error(`Please select a ${activeTab === 'movie' ? 'movie' : 'series'} from TMDb search or add a poster image.`);
       return;
     }
 
     try {
-      const data = {
+      const buildEntryPayload = (override?: { title: string; posterUrl: string }) => ({
         title: formData.title,
         posterUrl: formData.posterUrl,
         rating: Number(formData.rating),
+        review: formData.review,
+        folderId: formData.folderId,
         userId: user.uid,
         userEmail: user.email || '',
         listId: activeList.id,
         ...(activeTab === 'series' ? {
           currentSeason: Number(formData.currentSeason),
           currentEpisode: Number(formData.currentEpisode)
-        } : {})
-      };
+        } : {}),
+        ...override,
+      });
 
       if (editingEntry) {
         const response = await fetch(`/api/entries/${editingEntry.id}?type=${activeTab}`, {
@@ -439,7 +570,7 @@ export default function App() {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(data),
+          body: JSON.stringify(buildEntryPayload()),
         });
 
         if (!response.ok) {
@@ -447,13 +578,34 @@ export default function App() {
         }
 
         toast.success(`${activeTab === 'movie' ? 'Movie' : 'Series'} updated!`);
+      } else if (isBatchCreate) {
+        const responses = await Promise.all(
+          selectedTmdbResults.map((result) =>
+            fetch(`/api/entries?type=${activeTab}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(buildEntryPayload({
+                title: result.title,
+                posterUrl: result.posterUrl || DEFAULT_POSTER_FALLBACK,
+              })),
+            }),
+          ),
+        );
+
+        if (responses.some((response) => !response.ok)) {
+          throw new Error('Batch create failed');
+        }
+
+        toast.success(`${selectedTmdbResults.length} ${activeTab === 'movie' ? 'movies' : 'series'} added!`);
       } else {
         const response = await fetch(`/api/entries?type=${activeTab}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(data),
+          body: JSON.stringify(buildEntryPayload()),
         });
 
         if (!response.ok) {
@@ -594,6 +746,102 @@ export default function App() {
     }
   };
 
+  const createListByName = async (name: string) => {
+    if (!user?.uid || !user.email) {
+      toast.error('You must be signed in to create lists.');
+      return;
+    }
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setListSaving(true);
+    try {
+      const response = await fetch('/api/lists', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ownerUserId: user.uid,
+          ownerEmail: user.email,
+          ownerName: user.displayName || user.email,
+          name: trimmedName,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Create list failed');
+      }
+
+      await fetchLists();
+      setActiveListId(data.id);
+      toast.success('List created.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create list.';
+      toast.error(message);
+    } finally {
+      setListSaving(false);
+    }
+  };
+
+  const renameListByName = async (list: SharedList, name: string) => {
+    if (!user?.uid || list.permission !== 'owner') {
+      toast.error('Only the list owner can rename this list.');
+      return;
+    }
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setListSaving(true);
+    try {
+      const response = await fetch(`/api/lists/${list.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ownerUserId: user.uid,
+          name: trimmedName,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Rename list failed');
+      }
+
+      await fetchLists();
+      await fetchShares(list.id);
+      toast.success('List renamed.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to rename list.';
+      toast.error(message);
+    } finally {
+      setListSaving(false);
+    }
+  };
+
+  const handlePromptCreateList = () => {
+    const name = window.prompt('List name');
+    if (name !== null) {
+      void createListByName(name);
+    }
+  };
+
+  const handlePromptRenameList = (list: SharedList) => {
+    const name = window.prompt('Rename list', list.name);
+    if (name !== null) {
+      void renameListByName(list, name);
+    }
+  };
+
   const handleRenameList = async () => {
     if (!user?.uid || !activeList?.id || activeList.permission !== 'owner') {
       toast.error('Only the list owner can rename this list.');
@@ -664,6 +912,301 @@ export default function App() {
       toast.error(message);
     } finally {
       setListSaving(false);
+    }
+  };
+
+  const handleDeleteListTarget = async (list: SharedList) => {
+    if (!user?.uid || list.permission !== 'owner') {
+      toast.error('Only the list owner can delete this list.');
+      return;
+    }
+
+    if (!window.confirm(`Delete "${list.name}" and all entries in it?`)) {
+      return;
+    }
+
+    setListSaving(true);
+    try {
+      const response = await fetch(`/api/lists/${list.id}?ownerUserId=${encodeURIComponent(user.uid)}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data?.message || 'Delete list failed');
+      }
+
+      if (activeListId === list.id) {
+        setActiveListId('');
+      }
+      await fetchLists();
+      toast.success('List deleted.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete list.';
+      toast.error(message);
+    } finally {
+      setListSaving(false);
+    }
+  };
+
+  const handleCreateFolder = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!user?.uid || !activeList?.id || !canEditActiveList) {
+      toast.error('You only have view access to this list.');
+      return;
+    }
+
+    const name = newFolderName.trim();
+    if (!name) {
+      toast.error('Enter a folder name.');
+      return;
+    }
+
+    setFolderSaving(true);
+    try {
+      const response = await fetch('/api/folders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user.uid,
+          userEmail: user.email || '',
+          listId: activeList.id,
+          type: activeTab,
+          name,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Create folder failed');
+      }
+
+      setNewFolderName('');
+      await fetchFolders();
+      setActiveFolderId(data.id);
+      toast.success('Folder created.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create folder.';
+      toast.error(message);
+    } finally {
+      setFolderSaving(false);
+    }
+  };
+
+  const createFolderByName = async (name: string) => {
+    if (!user?.uid || !activeList?.id || !canEditActiveList) {
+      toast.error('You only have view access to this list.');
+      return;
+    }
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setFolderSaving(true);
+    try {
+      const response = await fetch('/api/folders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user.uid,
+          userEmail: user.email || '',
+          listId: activeList.id,
+          type: activeTab,
+          name: trimmedName,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Create folder failed');
+      }
+
+      await fetchFolders();
+      setActiveFolderId(data.id);
+      toast.success('Folder created.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to create folder.';
+      toast.error(message);
+    } finally {
+      setFolderSaving(false);
+    }
+  };
+
+  const renameFolderByName = async (folder: Folder, name: string) => {
+    if (!user?.uid || !canEditActiveList) {
+      toast.error('You only have view access to this list.');
+      return;
+    }
+
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setFolderSaving(true);
+    try {
+      const response = await fetch(`/api/folders/${folder.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user.uid,
+          userEmail: user.email || '',
+          name: trimmedName,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Rename folder failed');
+      }
+
+      await fetchFolders();
+      toast.success('Folder renamed.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to rename folder.';
+      toast.error(message);
+    } finally {
+      setFolderSaving(false);
+    }
+  };
+
+  const handlePromptCreateFolder = () => {
+    const name = window.prompt(`${activeTab === 'movie' ? 'Movie' : 'Series'} folder name`);
+    if (name !== null) {
+      void createFolderByName(name);
+    }
+  };
+
+  const handlePromptRenameFolder = (folder: Folder) => {
+    const name = window.prompt('Rename folder', folder.name);
+    if (name !== null) {
+      void renameFolderByName(folder, name);
+    }
+  };
+
+  const handleRenameFolder = async () => {
+    if (!user?.uid || !activeFolder || !canEditActiveList) {
+      toast.error('Select a folder to rename.');
+      return;
+    }
+
+    const name = renameFolderName.trim();
+    if (!name) {
+      toast.error('Enter a folder name.');
+      return;
+    }
+
+    setFolderSaving(true);
+    try {
+      const response = await fetch(`/api/folders/${activeFolder.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: user.uid,
+          userEmail: user.email || '',
+          name,
+        }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.message || 'Rename folder failed');
+      }
+
+      await fetchFolders();
+      toast.success('Folder renamed.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to rename folder.';
+      toast.error(message);
+    } finally {
+      setFolderSaving(false);
+    }
+  };
+
+  const handleDeleteFolder = async () => {
+    if (!user?.uid || !activeFolder || !canEditActiveList) {
+      toast.error('Select a folder to delete.');
+      return;
+    }
+
+    if (!window.confirm(`Delete "${activeFolder.name}"? Entries in it will stay in ${activeTab}s without a folder.`)) {
+      return;
+    }
+
+    setFolderSaving(true);
+    try {
+      const deleteQuery = new URLSearchParams({
+        userId: user.uid,
+        userEmail: user.email || '',
+      });
+      const response = await fetch(`/api/folders/${activeFolder.id}?${deleteQuery.toString()}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data?.message || 'Delete folder failed');
+      }
+
+      setActiveFolderId('all');
+      await fetchFolders();
+      await fetchEntries();
+      toast.success('Folder deleted.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete folder.';
+      toast.error(message);
+    } finally {
+      setFolderSaving(false);
+    }
+  };
+
+  const handleDeleteFolderTarget = async (folder: Folder) => {
+    if (!user?.uid || !canEditActiveList) {
+      toast.error('You only have view access to this list.');
+      return;
+    }
+
+    if (!window.confirm(`Delete "${folder.name}"? Entries in it will stay in ${activeTab}s without a folder.`)) {
+      return;
+    }
+
+    setFolderSaving(true);
+    try {
+      const deleteQuery = new URLSearchParams({
+        userId: user.uid,
+        userEmail: user.email || '',
+      });
+      const response = await fetch(`/api/folders/${folder.id}?${deleteQuery.toString()}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data?.message || 'Delete folder failed');
+      }
+
+      if (activeFolderId === folder.id) {
+        setActiveFolderId('all');
+      }
+      await fetchFolders();
+      await fetchEntries();
+      toast.success('Folder deleted.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to delete folder.';
+      toast.error(message);
+    } finally {
+      setFolderSaving(false);
     }
   };
 
@@ -820,101 +1363,155 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6 space-y-4 rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-neutral-800 text-sky-400">
-                <Users className="h-5 w-5" />
+      <div className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 lg:flex lg:gap-8">
+        <aside className="mb-8 lg:mb-0 lg:w-72 lg:shrink-0">
+          <div className="sticky top-28 space-y-6">
+            <section className="rounded-2xl border border-neutral-800 bg-neutral-900/70 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-medium uppercase text-neutral-500">Watching Lists</p>
+                  <p className="text-sm text-neutral-400">{canEditActiveList ? 'Can edit' : 'View only'}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePromptCreateList}
+                  disabled={listSaving}
+                  className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-white disabled:opacity-50"
+                  title="Create list"
+                >
+                  <ListPlus className="h-4 w-4" />
+                </button>
               </div>
-              <div className="min-w-0">
-                <p className="text-xs font-medium uppercase text-neutral-500">Watching List</p>
-                <p className="truncate text-sm font-semibold text-white">
-                  {activeList?.permission === 'owner' ? activeList?.name : `${activeList?.ownerName || activeList?.ownerEmail} / ${activeList?.name}`}
-                </p>
-              </div>
-            </div>
 
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <select
-                value={activeListId}
-                onChange={(event) => setActiveListId(event.target.value)}
-                className="bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400"
-              >
+              <div className="space-y-1">
                 {sharedLists.map((list) => (
-                  <option key={list.id} value={list.id}>
-                    {list.permission === 'owner' ? list.name : `${list.ownerName || list.ownerEmail} / ${list.name} (${list.permission})`}
-                  </option>
+                  <div key={list.id} className="relative" data-overflow-menu="true">
+                    <button
+                      type="button"
+                      onClick={() => setActiveListId(list.id)}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors",
+                        activeListId === list.id ? "bg-sky-400 text-black" : "text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                      )}
+                    >
+                      <Users className="h-4 w-4 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">{list.permission === 'owner' ? list.name : `${list.ownerName} / ${list.name}`}</span>
+                    </button>
+                    {list.permission === 'owner' && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setOpenListMenuId((current) => (current === list.id ? null : list.id));
+                        }}
+                        className={cn(
+                          "absolute right-1 top-1/2 -translate-y-1/2 rounded-lg p-1.5 transition-colors",
+                          activeListId === list.id ? "text-black hover:bg-black/10" : "text-neutral-500 hover:bg-neutral-700 hover:text-white"
+                        )}
+                        title="List actions"
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </button>
+                    )}
+                    {openListMenuId === list.id && (
+                      <div className="absolute right-0 top-10 z-40 w-36 rounded-xl border border-neutral-800 bg-neutral-950 p-1 shadow-xl">
+                        <button type="button" onClick={() => { setOpenListMenuId(null); handlePromptRenameList(list); }} className="w-full rounded-lg px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800">Rename</button>
+                        <button type="button" onClick={() => { setOpenListMenuId(null); setIsShareModalOpen(true); setActiveListId(list.id); }} className="w-full rounded-lg px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800">Share</button>
+                        <button type="button" onClick={() => { setOpenListMenuId(null); void handleDeleteListTarget(list); }} className="w-full rounded-lg px-3 py-2 text-left text-sm text-red-300 hover:bg-red-500/10">Delete</button>
+                      </div>
+                    )}
+                  </div>
                 ))}
-              </select>
+              </div>
+            </section>
 
-              <div className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-3 py-2 text-xs font-semibold text-neutral-300">
-                {canEditActiveList ? <Pencil className="h-4 w-4 text-sky-400" /> : <Eye className="h-4 w-4 text-neutral-500" />}
-                {canEditActiveList ? 'Can edit' : 'View only'}
+            <section className="rounded-2xl border border-neutral-800 bg-neutral-900/70 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-xs font-medium uppercase text-neutral-500">{activeTab === 'movie' ? 'Movie' : 'Series'} Folders</p>
+                <button
+                  type="button"
+                  onClick={handlePromptCreateFolder}
+                  disabled={!canEditActiveList || folderSaving}
+                  className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-white disabled:opacity-50"
+                  title="Create folder"
+                >
+                  <FolderPlus className="h-4 w-4" />
+                </button>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setIsShareModalOpen(true)}
-                disabled={activeList?.permission !== 'owner'}
-                className={cn(
-                  "flex items-center justify-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:border-sky-400/60",
-                  activeList?.permission !== 'owner' && "cursor-not-allowed opacity-50"
+              <div className="space-y-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveFolderId('all')}
+                  className={cn(
+                    "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors",
+                    activeFolderId === 'all' ? "bg-sky-400 text-black" : "text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                  )}
+                >
+                  <FolderIcon className="h-4 w-4 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">All {activeTab === 'movie' ? 'Movies' : 'Series'}</span>
+                  <span className="text-xs opacity-70">{(activeTab === 'movie' ? movies : series).length}</span>
+                </button>
+
+                {folders.map((folder) => (
+                  <div key={folder.id} className="relative" data-overflow-menu="true">
+                    <button
+                      type="button"
+                      onClick={() => setActiveFolderId(folder.id)}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors",
+                        activeFolderId === folder.id ? "bg-sky-400 text-black" : "text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                      )}
+                    >
+                      <FolderIcon className="h-4 w-4 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                      <span className="text-xs opacity-70">{folderEntryCounts[folder.id] || 0}</span>
+                    </button>
+                    {canEditActiveList && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setOpenFolderMenuId((current) => (current === folder.id ? null : folder.id));
+                        }}
+                        className={cn(
+                          "absolute right-8 top-1/2 -translate-y-1/2 rounded-lg p-1.5 transition-colors",
+                          activeFolderId === folder.id ? "text-black hover:bg-black/10" : "text-neutral-500 hover:bg-neutral-700 hover:text-white"
+                        )}
+                        title="Folder actions"
+                      >
+                        <MoreHorizontal className="h-4 w-4" />
+                      </button>
+                    )}
+                    {openFolderMenuId === folder.id && (
+                      <div className="absolute right-0 top-10 z-40 w-32 rounded-xl border border-neutral-800 bg-neutral-950 p-1 shadow-xl">
+                        <button type="button" onClick={() => { setOpenFolderMenuId(null); handlePromptRenameFolder(folder); }} className="w-full rounded-lg px-3 py-2 text-left text-sm text-neutral-200 hover:bg-neutral-800">Rename</button>
+                        <button type="button" onClick={() => { setOpenFolderMenuId(null); void handleDeleteFolderTarget(folder); }} className="w-full rounded-lg px-3 py-2 text-left text-sm text-red-300 hover:bg-red-500/10">Delete</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {unfiledEntryCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveFolderId('unfiled')}
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-colors",
+                      activeFolderId === 'unfiled' ? "bg-sky-400 text-black" : "text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                    )}
+                  >
+                    <FolderIcon className="h-4 w-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">No Folder</span>
+                    <span className="text-xs opacity-70">{unfiledEntryCount}</span>
+                  </button>
                 )}
-              >
-                <Share2 className="h-4 w-4" />
-                Share
-              </button>
-            </div>
+              </div>
+            </section>
           </div>
+        </aside>
 
-          <div className="grid gap-3 border-t border-neutral-800 pt-4 lg:grid-cols-[1fr_1fr_auto]">
-            <form onSubmit={handleCreateList} className="flex gap-2">
-              <input
-                type="text"
-                value={newListName}
-                onChange={(event) => setNewListName(event.target.value)}
-                placeholder="New list name"
-                className="min-w-0 flex-1 bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400"
-              />
-              <button
-                type="submit"
-                disabled={listSaving}
-                className="rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Create
-              </button>
-            </form>
-
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={renameListName}
-                onChange={(event) => setRenameListName(event.target.value)}
-                disabled={activeList?.permission !== 'owner'}
-                placeholder="Rename selected list"
-                className="min-w-0 flex-1 bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
-              />
-              <button
-                type="button"
-                onClick={() => void handleRenameList()}
-                disabled={listSaving || activeList?.permission !== 'owner'}
-                className="rounded-xl border border-neutral-800 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:border-sky-400/60 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Rename
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => void handleDeleteList()}
-              disabled={listSaving || activeList?.permission !== 'owner'}
-              className="rounded-xl border border-red-500/30 px-4 py-2.5 text-sm font-semibold text-red-300 transition-colors hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Delete List
-            </button>
-          </div>
-        </div>
+        <main className="min-w-0 flex-1">
 
         {/* Navigation & Actions */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 mb-10">
@@ -965,6 +1562,48 @@ export default function App() {
           </div>
         </div>
 
+        {activeFolderId === 'all' && (folders.length > 0 || unfiledEntryCount > 0) && (
+          <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+            {folders.map((folder) => (
+              <button
+                key={folder.id}
+                type="button"
+                onClick={() => setActiveFolderId(folder.id)}
+                className="group flex min-h-28 flex-col justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4 text-left transition-colors hover:border-sky-400/60"
+              >
+                <FolderIcon className="h-8 w-8 text-sky-400 transition-transform group-hover:scale-105" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">{folder.name}</p>
+                  <p className="text-xs text-neutral-500">{folderEntryCounts[folder.id] || 0} items</p>
+                </div>
+              </button>
+            ))}
+            {unfiledEntryCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setActiveFolderId('unfiled')}
+                className="group flex min-h-28 flex-col justify-between rounded-xl border border-neutral-800 bg-neutral-900 p-4 text-left transition-colors hover:border-sky-400/60"
+              >
+                <FolderIcon className="h-8 w-8 text-neutral-500 transition-transform group-hover:scale-105" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">No Folder</p>
+                  <p className="text-xs text-neutral-500">{unfiledEntryCount} items</p>
+                </div>
+              </button>
+            )}
+          </div>
+        )}
+
+        {activeFolderId !== 'all' && (
+          <button
+            type="button"
+            onClick={() => setActiveFolderId('all')}
+            className="mb-6 text-sm font-semibold text-sky-400 transition-colors hover:text-sky-300"
+          >
+            Back to All {activeTab === 'movie' ? 'Movies' : 'Series'}
+          </button>
+        )}
+
         {/* Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6 sm:gap-8">
           <AnimatePresence mode="popLayout">
@@ -979,9 +1618,7 @@ export default function App() {
                 className="group relative flex flex-col"
               >
                 <div
-                  onClick={() =>
-                    setActiveEntryId((currentId) => (currentId === item.id ? null : item.id))
-                  }
+                  onClick={() => setDetailEntry(item)}
                   className="relative aspect-[2/3] rounded-2xl overflow-hidden bg-neutral-900 border border-neutral-800 mb-4 group-hover:border-sky-400/50 transition-colors"
                 >
                   <img 
@@ -1031,6 +1668,18 @@ export default function App() {
                 </div>
 
                 <h3 className="font-bold text-sm sm:text-base line-clamp-1 mb-1">{item.title}</h3>
+
+                {item.folderId && (
+                  <p className="mb-1 text-xs font-medium text-sky-400">
+                    {folders.find((folder) => folder.id === item.folderId)?.name || 'Folder'}
+                  </p>
+                )}
+
+                {item.review && (
+                  <p className="mb-2 line-clamp-2 text-xs leading-5 text-neutral-500">
+                    {item.review}
+                  </p>
+                )}
                 
                 {activeTab === 'series' && (
                   <div className="flex items-center justify-between mt-auto">
@@ -1044,20 +1693,119 @@ export default function App() {
           </AnimatePresence>
         </div>
 
-        {filteredEntries.length === 0 && (
+        {filteredEntries.length === 0 && !(activeFolderId === 'all' && folders.length > 0) && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="w-16 h-16 bg-neutral-900 rounded-full flex items-center justify-center mb-6 border border-neutral-800">
               <Search className="w-8 h-8 text-neutral-700" />
             </div>
-            <h3 className="text-xl font-bold mb-2">No {activeTab} found</h3>
-            <p className="text-neutral-500">Try adjusting your search or add a new entry.</p>
+            <h3 className="text-xl font-bold mb-2">
+              No {activeTab === 'movie' ? 'movie' : 'series'} found
+            </h3>
+            <p className="text-neutral-500">
+              {activeFolderId === 'all' ? 'Try adjusting your search or add a new entry.' : 'This folder is empty.'}
+            </p>
           </div>
         )}
-      </main>
+        </main>
+      </div>
 
       <footer className="mt-auto border-t border-neutral-800/50 py-6 text-center text-sm text-neutral-500">
         © 2026 Created by Thit Lwin Win Thant.
       </footer>
+
+      <AnimatePresence>
+        {detailEntry && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setDetailEntry(null)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 18 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 18 }}
+              className="relative max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-3xl border border-neutral-800 bg-neutral-900 shadow-2xl"
+            >
+              <div className="grid max-h-[90vh] overflow-y-auto md:grid-cols-[240px_1fr]">
+                <img
+                  src={detailEntry.posterUrl}
+                  alt={detailEntry.title}
+                  className="h-80 w-full object-cover md:h-full"
+                  referrerPolicy="no-referrer"
+                  onError={(event) => {
+                    (event.target as HTMLImageElement).src = DEFAULT_POSTER_FALLBACK;
+                  }}
+                />
+                <div className="space-y-5 p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 className="text-2xl font-bold text-white">{detailEntry.title}</h2>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-neutral-400">
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-neutral-950 px-2 py-1">
+                          <Star className="h-3.5 w-3.5 fill-sky-400 text-sky-400" />
+                          {detailEntry.rating}
+                        </span>
+                        {detailEntry.folderId && (
+                          <span className="rounded-lg bg-neutral-950 px-2 py-1">
+                            {folders.find((folder) => folder.id === detailEntry.folderId)?.name || 'Folder'}
+                          </span>
+                        )}
+                        {activeTab === 'series' && (
+                          <span className="rounded-lg bg-neutral-950 px-2 py-1">
+                            S{(detailEntry as Series).currentSeason} E{(detailEntry as Series).currentEpisode}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <button onClick={() => setDetailEntry(null)} className="rounded-lg p-2 text-neutral-500 transition-colors hover:text-white">
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+
+                  <div>
+                    <h3 className="mb-2 text-sm font-semibold text-neutral-300">Review</h3>
+                    <p className="whitespace-pre-wrap text-sm leading-6 text-neutral-400">
+                      {detailEntry.review || 'No review yet.'}
+                    </p>
+                  </div>
+
+                  {canEditActiveList && (
+                    <div className="flex gap-3 border-t border-neutral-800 pt-5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const entry = detailEntry;
+                          setDetailEntry(null);
+                          handleOpenModal(entry);
+                        }}
+                        className="flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-black transition-colors hover:bg-neutral-200"
+                      >
+                        <Edit2 className="h-4 w-4" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const entryId = detailEntry.id;
+                          setDetailEntry(null);
+                          void handleDelete(entryId);
+                        }}
+                        className="flex items-center gap-2 rounded-xl border border-red-500/30 px-4 py-2.5 text-sm font-semibold text-red-300 transition-colors hover:bg-red-500/10"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {isShareModalOpen && (
@@ -1166,9 +1914,9 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-lg bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden shadow-2xl"
+              className="relative flex max-h-[92vh] w-full max-w-lg flex-col bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden shadow-2xl"
             >
-              <div className="p-6 border-b border-neutral-800 flex items-center justify-between">
+              <div className="shrink-0 p-6 border-b border-neutral-800 flex items-center justify-between">
                 <h2 className="text-xl font-bold">
                   {editingEntry ? 'Edit' : 'Add'} {activeTab === 'movie' ? 'Movie' : 'Series'}
                 </h2>
@@ -1177,18 +1925,35 @@ export default function App() {
                 </button>
               </div>
 
-              <form onSubmit={handleSubmit} className="p-6 space-y-6">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-neutral-400">Title</label>
-                  <input 
-                    required
-                    type="text" 
-                    value={formData.title}
-                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                    placeholder="Inception, Breaking Bad..."
-                    className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400 transition-colors"
-                  />
-                </div>
+              <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+                <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-6">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-400">Title</label>
+                    <input 
+                      required={Boolean(editingEntry) || selectedTmdbResultIds.length === 0}
+                      type="text" 
+                      value={formData.title}
+                      onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                      placeholder="Inception, Breaking Bad..."
+                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400 transition-colors"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-neutral-400">Folder</label>
+                    <select
+                      value={formData.folderId}
+                      onChange={(event) => setFormData({ ...formData, folderId: event.target.value })}
+                      className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-400"
+                    >
+                      <option value="">No folder</option>
+                      {folders.map((folder) => (
+                        <option key={folder.id} value={folder.id}>
+                          {folder.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
                 <div className="space-y-3 rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
                   <div className="space-y-2">
@@ -1225,14 +1990,47 @@ export default function App() {
                   )}
 
                   {tmdbSearchResults.length > 0 && (
+                    <div className="space-y-3">
+                      {!editingEntry && (
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs text-neutral-500">
+                            {selectedTmdbResultIds.length} selected. Folder, rating, review, and progress below apply to selected items.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={handleToggleAllTmdbResults}
+                            className="rounded-lg border border-neutral-700 px-3 py-2 text-xs font-semibold text-neutral-200 transition-colors hover:border-sky-400/60"
+                          >
+                            {tmdbSearchResults.every((result) => selectedTmdbResultIds.includes(getTmdbResultKey(result))) ? 'Clear All' : 'Select All'}
+                          </button>
+                        </div>
+                      )}
+
                     <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
-                      {tmdbSearchResults.map((result) => (
+                      {tmdbSearchResults.map((result) => {
+                        const resultKey = getTmdbResultKey(result);
+                        const isSelected = selectedTmdbResultIds.includes(resultKey);
+
+                        return (
                         <button
-                          key={`${result.mediaType}-${result.id}`}
+                          key={resultKey}
                           type="button"
                           onClick={() => handleSelectTmdbResult(result)}
-                          className="flex w-full items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-2 text-left transition-colors hover:border-sky-400/50 hover:bg-neutral-800"
+                          className={cn(
+                            "flex w-full items-center gap-3 rounded-xl border bg-neutral-900 p-2 text-left transition-colors hover:border-sky-400/50 hover:bg-neutral-800",
+                            isSelected ? "border-sky-400/70" : "border-neutral-800"
+                          )}
                         >
+                          {!editingEntry && (
+                            <span
+                              className={cn(
+                                "flex h-5 w-5 shrink-0 items-center justify-center rounded border text-xs font-bold",
+                                isSelected ? "border-sky-400 bg-sky-400 text-black" : "border-neutral-600 text-transparent"
+                              )}
+                            >
+                              ✓
+                            </span>
+                          )}
                           <img
                             src={result.posterUrl || DEFAULT_POSTER_FALLBACK}
                             alt={result.title}
@@ -1247,7 +2045,8 @@ export default function App() {
                             <p className="text-xs text-neutral-500">{result.year || 'Unknown year'}</p>
                           </div>
                         </button>
-                      ))}
+                      )})}
+                    </div>
                     </div>
                   )}
                 </div>
@@ -1271,6 +2070,17 @@ export default function App() {
                       />
                     </div>
                   )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-neutral-400">Review</label>
+                  <textarea
+                    value={formData.review}
+                    onChange={(e) => setFormData({ ...formData, review: e.target.value })}
+                    placeholder={`Write what you think about this ${activeTab === 'movie' ? 'movie' : 'series'}...`}
+                    rows={4}
+                    className="w-full resize-none bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-sm leading-6 focus:outline-none focus:border-sky-400 transition-colors"
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-6">
@@ -1316,12 +2126,16 @@ export default function App() {
                   )}
                 </div>
 
-                <button 
-                  type="submit"
-                  className="w-full py-4 bg-sky-400 text-black font-bold rounded-2xl hover:bg-sky-300 transition-all active:scale-95 shadow-lg shadow-sky-400/20"
-                >
-                  {editingEntry ? 'Save Changes' : `Add ${activeTab === 'movie' ? 'Movie' : 'Series'}`}
-                </button>
+                </div>
+
+                <div className="shrink-0 border-t border-neutral-800 bg-neutral-900/95 p-4">
+                  <button 
+                    type="submit"
+                    className="w-full py-4 bg-sky-400 text-black font-bold rounded-2xl hover:bg-sky-300 transition-all active:scale-95 shadow-lg shadow-sky-400/20"
+                  >
+                    {editingEntry ? 'Save Changes' : `Add ${activeTab === 'movie' ? 'Movie' : 'Series'}`}
+                  </button>
+                </div>
               </form>
             </motion.div>
           </div>

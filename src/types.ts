@@ -3,8 +3,10 @@ export interface Movie {
   title: string;
   posterUrl: string;
   rating: number;
+  review?: string;
   userId: string;
   listId?: string;
+  folderId?: string;
   createdAt: string;
 }
 
@@ -13,10 +15,12 @@ export interface Series {
   title: string;
   posterUrl: string;
   rating: number;
+  review?: string;
   currentSeason: number;
   currentEpisode: number;
   userId: string;
   listId?: string;
+  folderId?: string;
   createdAt: string;
 }
 
@@ -53,6 +57,16 @@ export interface WatchList {
   ownerEmail: string;
   ownerName: string;
   isDefault: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  type: EntryType;
+  listId: string;
+  ownerUserId: string;
   createdAt: string;
   updatedAt?: string;
 }

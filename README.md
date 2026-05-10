@@ -16,6 +16,7 @@ A full-stack watch tracker for saving movies and TV series, rating them, and kee
 - Movie and series ratings from 0 to 10
 - Series progress tracking by season and episode
 - Create, rename, and delete custom watched lists
+- Create, rename, and delete folders inside Movies and TV Series
 - Share a watched list with another user's email
 - View-only and edit access for shared lists
 - Switch between your own lists and lists shared with you
@@ -125,6 +126,10 @@ curl "http://localhost:3001/api/tmdb/search?type=series&query=breaking%20bad"
 - `POST /api/lists`
 - `PUT /api/lists/:id`
 - `DELETE /api/lists/:id?ownerUserId=<id>`
+- `GET /api/folders?userId=<id>&userEmail=<email>&listId=<listId>&type=movie|series`
+- `POST /api/folders`
+- `PUT /api/folders/:id`
+- `DELETE /api/folders/:id?userId=<id>&userEmail=<email>`
 - `GET /api/shares?userId=<id>&email=<email>&listId=<listId>`
 - `POST /api/shares`
 - `PUT /api/shares/:id`
@@ -149,6 +154,15 @@ Users can share the currently selected owned list from the Share modal. Sharing 
 - `Can edit` lets another user add, edit, and delete entries in the shared list.
 - Owners can update or remove access at any time.
 - Shared users can switch between their own lists and lists shared with them from the Watching List selector.
+
+## Folders
+
+Movies and TV Series each have their own folders inside the selected Watching List.
+
+- Create folders from the active Movies or TV Series tab.
+- Rename or delete the selected folder.
+- Add/edit forms include a Folder selector.
+- Deleting a folder keeps the entries and removes only their folder assignment.
 
 ## Deployment
 
